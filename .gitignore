@@ -62,3 +62,4 @@ htmlcov/
 
 # Distribution / packaging
 *.whl
+.specs
