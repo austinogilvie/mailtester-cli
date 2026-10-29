@@ -18,6 +18,7 @@ from mailtester_cli.errors import (
     MissingAPIKeyError,
     error_from_response,
 )
+from mailtester_cli.models import Credits, FinderResult, ListJob, VerifyResult
 
 BASE_URL = "https://app.mailtester.com/api/v1"
 ENV_VAR = "MAILTESTER_API_KEY"
@@ -135,3 +136,28 @@ class MailTester:
                 body=body if isinstance(body, dict) else None,
             )
         return body["data"]
+
+    def verify(
+        self, email: str, *, timeout: int | None = None, smtp_check: bool | None = None
+    ) -> VerifyResult:
+        """Verify one address. `timeout` is the server's SMTP timeout in seconds. 1 credit."""
+        body: dict[str, Any] = {"email": email}
+        if timeout is not None:
+            body["timeout"] = timeout
+        if smtp_check is not None:
+            body["smtp_check"] = smtp_check
+        return VerifyResult.from_dict(self._data("POST", "/verify", json=body))
+
+    def find_email(self, first_name: str, last_name: str, domain: str) -> FinderResult:
+        """Find a person's address at a domain. 3 credits."""
+        body = {"first_name": first_name, "last_name": last_name, "domain": domain}
+        return FinderResult.from_dict(self._data("POST", "/finder/email", json=body))
+
+    def lists(self, *, per_page: int | None = None) -> list[ListJob]:
+        """Return the first page of verification lists."""
+        params = {"per_page": per_page} if per_page is not None else None
+        return [ListJob.from_dict(item) for item in self._data("GET", "/lists", params=params)]
+
+    def credits(self) -> Credits:
+        """Return the account's credit balance."""
+        return Credits.from_dict(self._data("GET", "/credits"))

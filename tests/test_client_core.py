@@ -3,6 +3,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import serve
 
 import mailtester_cli.client
 from mailtester_cli import MailTester, __version__
@@ -24,14 +25,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "api"
 CREDITS = f"{BASE_URL}/credits"
 
 
-def serve(respx_mock, api_fixture, name, url=CREDITS, method="GET"):
-    status, headers, body = api_fixture(name)
-    kwargs = {"text": body} if isinstance(body, str) else {"json": body}
-    return respx_mock.request(method, url).respond(status, headers=headers, **kwargs)
-
-
-def raised(respx_mock, api_fixture, name, api_key="evp_test"):
-    serve(respx_mock, api_fixture, name)
+def raised(respx_mock, name, api_key="evp_test"):
+    serve(respx_mock, name, CREDITS)
     mt = MailTester(api_key=api_key)
     with pytest.raises(MailTesterError) as info:
         mt._data("GET", "/credits")
@@ -48,21 +43,21 @@ def raised_inline(respx_mock, status, **respond):
 # Key resolution and setup
 
 
-def test_key_from_argument_beats_env(respx_mock, api_fixture, monkeypatch):
+def test_key_from_argument_beats_env(respx_mock, monkeypatch):
     monkeypatch.setenv("MAILTESTER_API_KEY", "evp_env")
-    route = serve(respx_mock, api_fixture, "credits_before")
+    route = serve(respx_mock, "credits_before", CREDITS)
     MailTester(api_key="evp_arg")._data("GET", "/credits")
     assert route.calls.last.request.headers["Authorization"] == "Bearer evp_arg"
 
 
-def test_key_from_env(respx_mock, api_fixture, monkeypatch):
+def test_key_from_env(respx_mock, monkeypatch):
     monkeypatch.setenv("MAILTESTER_API_KEY", "evp_env")
-    route = serve(respx_mock, api_fixture, "credits_before")
+    route = serve(respx_mock, "credits_before", CREDITS)
     MailTester()._data("GET", "/credits")
     assert route.calls.last.request.headers["Authorization"] == "Bearer evp_env"
 
 
-def test_key_from_dotenv(respx_mock, api_fixture, monkeypatch):
+def test_key_from_dotenv(respx_mock, monkeypatch):
     calls = []
 
     def fake_load_dotenv(*args, **kwargs):
@@ -70,7 +65,7 @@ def test_key_from_dotenv(respx_mock, api_fixture, monkeypatch):
         monkeypatch.setenv("MAILTESTER_API_KEY", "evp_dotenv")
 
     monkeypatch.setattr(mailtester_cli.client, "load_dotenv", fake_load_dotenv)
-    route = serve(respx_mock, api_fixture, "credits_before")
+    route = serve(respx_mock, "credits_before", CREDITS)
     MailTester()._data("GET", "/credits")
     assert calls
     assert route.calls.last.request.headers["Authorization"] == "Bearer evp_dotenv"
@@ -93,8 +88,8 @@ def test_missing_key(api_key):
     assert info.value.body is None
 
 
-def test_request_headers(respx_mock, api_fixture):
-    route = serve(respx_mock, api_fixture, "credits_before")
+def test_request_headers(respx_mock):
+    route = serve(respx_mock, "credits_before", CREDITS)
     MailTester(api_key="evp_test")._data("GET", "/credits")
     headers = route.calls.last.request.headers
     assert headers["Authorization"] == "Bearer evp_test"
@@ -102,8 +97,8 @@ def test_request_headers(respx_mock, api_fixture):
     assert headers["User-Agent"] == f"mailtester-cli/{__version__}"
 
 
-def test_base_url_override(respx_mock, api_fixture):
-    route = serve(respx_mock, api_fixture, "credits_before", url="http://test.local/api/v1/credits")
+def test_base_url_override(respx_mock):
+    route = serve(respx_mock, "credits_before", "http://test.local/api/v1/credits")
     mt = MailTester(api_key="evp_test", base_url="http://test.local/api/v1/")
     assert mt.base_url == "http://test.local/api/v1"
     mt._data("GET", "/credits")
@@ -119,18 +114,16 @@ def test_default_timeout():
 # Success
 
 
-def test_200_unwraps_data(respx_mock, api_fixture):
-    serve(respx_mock, api_fixture, "credits_before")
+def test_200_unwraps_data(respx_mock):
+    serve(respx_mock, "credits_before", CREDITS)
     data = MailTester(api_key="evp_test")._data("GET", "/credits")
     assert data["balance"] == 100
     assert data["account_type"] == "pay_as_you_go"
     assert "success" not in data
 
 
-def test_201_unwraps_data_and_sends_json(respx_mock, api_fixture):
-    route = serve(
-        respx_mock, api_fixture, "batch_submit", url=f"{BASE_URL}/verify/batch", method="POST"
-    )
+def test_201_unwraps_data_and_sends_json(respx_mock):
+    route = serve(respx_mock, "batch_submit", f"{BASE_URL}/verify/batch", method="POST")
     payload = {"emails": ["batch1@example.com"], "name": "discovery"}
     data = MailTester(api_key="evp_test")._data("POST", "/verify/batch", json=payload)
     assert data == {
@@ -144,9 +137,9 @@ def test_201_unwraps_data_and_sends_json(respx_mock, api_fixture):
     assert httpx.Response(200, content=request.content).json() == payload
 
 
-def test_request_returns_raw_csv_response(respx_mock, api_fixture):
+def test_request_returns_raw_csv_response(respx_mock):
     url = f"{BASE_URL}/verify/batch/1457/results"
-    route = serve(respx_mock, api_fixture, "batch_results_csv_all", url=url)
+    route = serve(respx_mock, "batch_results_csv_all", url)
     response = MailTester(api_key="evp_test")._request(
         "GET", "/verify/batch/1457/results", params={"format": "csv", "filter": "all"}
     )
@@ -172,16 +165,16 @@ def test_2xx_non_json_raises(respx_mock):
 # Error mapping
 
 
-def test_401(respx_mock, api_fixture):
-    _, e = raised(respx_mock, api_fixture, "error_401")
+def test_401(respx_mock):
+    _, e = raised(respx_mock, "error_401")
     assert isinstance(e, AuthenticationError)
     assert str(e) == "Invalid API key"
     assert e.status_code == 401
     assert e.body["success"] is False
 
 
-def test_402(respx_mock, api_fixture):
-    _, e = raised(respx_mock, api_fixture, "error_402")
+def test_402(respx_mock):
+    _, e = raised(respx_mock, "error_402")
     assert isinstance(e, InsufficientCreditsError)
     assert e.available_credits == 0
     assert str(e) == "Insufficient credits"
@@ -193,8 +186,8 @@ def test_402_without_available_credits(respx_mock):
     assert e.available_credits is None
 
 
-def test_404(respx_mock, api_fixture):
-    _, e = raised(respx_mock, api_fixture, "error_404")
+def test_404(respx_mock):
+    _, e = raised(respx_mock, "error_404")
     assert isinstance(e, NotFoundError)
     assert str(e) == "Bulk verification not found"
 
@@ -206,8 +199,8 @@ def test_409(respx_mock):
     assert e.status_code == 409
 
 
-def test_422(respx_mock, api_fixture):
-    _, e = raised(respx_mock, api_fixture, "error_422")
+def test_422(respx_mock):
+    _, e = raised(respx_mock, "error_422")
     assert isinstance(e, ValidationError)
     assert e.errors == {"emails": ["The emails field is required."]}
     assert str(e) == "emails: The emails field is required."
@@ -235,8 +228,8 @@ def test_422_wraps_bare_string(respx_mock):
     assert str(e) == "emails: The emails field is required."
 
 
-def test_429(respx_mock, api_fixture):
-    _, e = raised(respx_mock, api_fixture, "error_429")
+def test_429(respx_mock):
+    _, e = raised(respx_mock, "error_429")
     assert isinstance(e, RateLimitError)
     assert e.retry_after == 30
     assert str(e) == "Rate limit exceeded"
@@ -248,14 +241,14 @@ def test_429_without_retry_after(respx_mock):
     assert e.retry_after is None
 
 
-def test_500(respx_mock, api_fixture):
-    _, e = raised(respx_mock, api_fixture, "error_500")
+def test_500(respx_mock):
+    _, e = raised(respx_mock, "error_500")
     assert isinstance(e, ServerError)
     assert str(e) == "Verification failed: SMTP connection error"
 
 
-def test_502(respx_mock, api_fixture):
-    _, e = raised(respx_mock, api_fixture, "error_502")
+def test_502(respx_mock):
+    _, e = raised(respx_mock, "error_502")
     assert isinstance(e, ServerError)
     assert str(e) == "The deliverability engine is currently unavailable."
 
@@ -273,7 +266,7 @@ def test_502(respx_mock, api_fixture):
     ],
 )
 def test_subclasses_are_mailtester_errors(respx_mock, api_fixture, name, cls):
-    _, e = raised(respx_mock, api_fixture, name)
+    _, e = raised(respx_mock, name)
     assert type(e) is cls
     assert isinstance(e, MailTesterError)
     assert e.status_code == api_fixture(name)[0]
@@ -309,27 +302,27 @@ def test_rate_limit_before_any_request():
     assert MailTester(api_key="evp_test").rate_limit == RateLimit(None, None, None)
 
 
-def test_rate_limit_after_success(respx_mock, api_fixture):
-    serve(respx_mock, api_fixture, "credits_before")
+def test_rate_limit_after_success(respx_mock):
+    serve(respx_mock, "credits_before", CREDITS)
     mt = MailTester(api_key="evp_test")
     mt._data("GET", "/credits")
     assert mt.rate_limit == RateLimit(60, 54, datetime(2026, 10, 29, 0, 42, tzinfo=UTC))
 
 
-def test_rate_limit_updated_on_error(respx_mock, api_fixture):
-    mt, e = raised(respx_mock, api_fixture, "error_404")
+def test_rate_limit_updated_on_error(respx_mock):
+    mt, e = raised(respx_mock, "error_404")
     assert isinstance(e, NotFoundError)
     assert mt.rate_limit.remaining == 33
     assert mt.rate_limit.reset == datetime(2026, 10, 29, 0, 43, tzinfo=UTC)
 
 
-def test_rate_limit_missing_reset_on_401(respx_mock, api_fixture):
-    mt, _ = raised(respx_mock, api_fixture, "error_401")
+def test_rate_limit_missing_reset_on_401(respx_mock):
+    mt, _ = raised(respx_mock, "error_401")
     assert mt.rate_limit == RateLimit(60, 34, None)
 
 
-def test_rate_limit_without_headers(respx_mock, api_fixture):
-    mt, _ = raised(respx_mock, api_fixture, "error_500")
+def test_rate_limit_without_headers(respx_mock):
+    mt, _ = raised(respx_mock, "error_500")
     assert mt.rate_limit == RateLimit(None, None, None)
 
 
@@ -381,8 +374,8 @@ def test_repr_hides_key():
     assert "evp_secret" not in repr(mt)
 
 
-def test_auth_error_hides_key(respx_mock, api_fixture):
-    _, e = raised(respx_mock, api_fixture, "error_401", api_key="evp_secret")
+def test_auth_error_hides_key(respx_mock):
+    _, e = raised(respx_mock, "error_401", api_key="evp_secret")
     assert isinstance(e, AuthenticationError)
     for text in (str(e), repr(e), repr(e.body)):
         assert "evp_secret" not in text
@@ -404,8 +397,8 @@ def test_context_manager_closes_owned_client():
     assert mt._client.is_closed
 
 
-def test_injected_client_left_open(respx_mock, api_fixture):
-    route = serve(respx_mock, api_fixture, "credits_before")
+def test_injected_client_left_open(respx_mock):
+    route = serve(respx_mock, "credits_before", CREDITS)
     client = httpx.Client()
     with MailTester(api_key="evp_test", http_client=client) as mt:
         assert mt._client is client
