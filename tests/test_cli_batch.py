@@ -1,0 +1,390 @@
+import copy
+import json
+
+import httpx
+import pytest
+from conftest import load_fixture, sent_json, serve
+from typer.testing import CliRunner
+
+from mailtester_cli.cli import app
+from mailtester_cli.client import BASE_URL, MailTester
+
+SUBMIT = f"{BASE_URL}/verify/batch"
+STATUS = f"{BASE_URL}/verify/batch/1457"
+RESULTS = f"{BASE_URL}/verify/batch/1457/results"
+EMAILS = ["batch1@example.com", "batch2@example.com", "batch3@example.net"]
+PROCESSING = "Batch 1457  processing  0%  (0/3)"
+COMPLETED = "Batch 1457  completed  100%  (3/3)"
+
+runner = CliRunner()
+
+
+class FakeClock:
+    """Stands in for time.monotonic/time.sleep: sleep records the delay and advances now."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
+@pytest.fixture
+def api_key(monkeypatch):
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_test")
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    fake = FakeClock()
+    monkeypatch.setattr(MailTester, "_sleep", staticmethod(fake.sleep))
+    monkeypatch.setattr(MailTester, "_clock", staticmethod(fake.now))
+    return fake
+
+
+def fixture_data(name: str):
+    return copy.deepcopy(load_fixture(name)[2]["data"])
+
+
+def status_response(name: str, **data) -> httpx.Response:
+    return httpx.Response(200, json={"success": True, "data": fixture_data(name) | data})
+
+
+def write_emails(tmp_path, lines: list[str]) -> str:
+    path = tmp_path / "emails.txt"
+    path.write_text("\n".join(lines) + "\n")
+    return str(path)
+
+
+def many(n: int) -> list[str]:
+    return [f"user{i}@example.com" for i in range(n)]
+
+
+def serve_results(respx_mock, name: str, format_: str = "json", filter_: str = "all"):
+    params = {"format": format_, "filter": filter_}
+    return serve(respx_mock, name, RESULTS, params__eq=params)
+
+
+def csv_text() -> str:
+    return load_fixture("batch_results_csv_all")[2]
+
+
+def json_rows(name: str = "batch_results_json_all") -> list[dict]:
+    return fixture_data(name)
+
+
+# submit
+
+
+def test_submit_small_file(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    path = write_emails(tmp_path, [EMAILS[0], "", f"  {EMAILS[1]}  ", EMAILS[2]])
+    result = runner.invoke(app, ["batch", "submit", path])
+    assert result.exit_code == 0
+    assert sent_json(route) == {"emails": EMAILS}
+    assert result.stderr == "This will use up to 3 credits.\n"
+    assert result.stdout == "Submitted batch 1457 (3 emails)\n"
+
+
+def test_submit_with_name(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    path = write_emails(tmp_path, EMAILS)
+    result = runner.invoke(app, ["batch", "submit", path, "--name", "discovery"])
+    assert result.exit_code == 0
+    assert sent_json(route) == {"emails": EMAILS, "name": "discovery"}
+
+
+def test_submit_from_stdin(respx_mock, api_key):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    result = runner.invoke(app, ["batch", "submit", "-"], input="\n".join(EMAILS) + "\n")
+    assert result.exit_code == 0
+    assert sent_json(route) == {"emails": EMAILS}
+
+
+def test_submit_single_address_says_credit(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, EMAILS[:1])])
+    assert result.stderr == "This will use up to 1 credit.\n"
+
+
+def test_submit_json(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    result = runner.invoke(app, ["--json", "batch", "submit", write_emails(tmp_path, EMAILS)])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == fixture_data("batch_submit")
+
+
+# confirmation
+
+
+def test_confirm_declined(respx_mock, api_key, tmp_path):
+    path = write_emails(tmp_path, many(100))
+    result = runner.invoke(app, ["batch", "submit", path], input="n\n")
+    assert result.exit_code == 1
+    assert result.stderr.startswith("This will use up to 100 credits.\nContinue? [y/N]:")
+    assert result.stderr.endswith("Aborted.\n")
+    assert "Submitted" not in result.stdout
+    assert not respx_mock.calls
+
+
+def test_confirm_accepted(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    path = write_emails(tmp_path, many(100))
+    result = runner.invoke(app, ["batch", "submit", path], input="y\n")
+    assert result.exit_code == 0
+    assert "Continue?" in result.stderr
+    assert sent_json(route) == {"emails": many(100)}
+
+
+@pytest.mark.parametrize("flag", ["--yes", "-y"])
+def test_confirm_skipped_with_yes(respx_mock, api_key, tmp_path, flag):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    path = write_emails(tmp_path, many(100))
+    result = runner.invoke(app, ["batch", "submit", path, flag])
+    assert result.exit_code == 0
+    assert result.stderr == "This will use up to 100 credits.\n"
+    assert route.called
+
+
+def test_confirm_below_threshold(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, many(99))])
+    assert result.exit_code == 0
+    assert "Continue?" not in result.stderr
+
+
+def test_stdin_requires_yes(respx_mock, api_key):
+    result = runner.invoke(app, ["batch", "submit", "-"], input="\n".join(many(100)))
+    assert result.exit_code == 1
+    assert result.stderr.endswith(
+        "Error: Pass --yes to confirm spending 100 credits when reading from stdin.\n"
+    )
+    assert not respx_mock.calls
+
+
+def test_stdin_with_yes(respx_mock, api_key):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    result = runner.invoke(app, ["batch", "submit", "-", "--yes"], input="\n".join(many(100)))
+    assert result.exit_code == 0
+    assert sent_json(route) == {"emails": many(100)}
+
+
+# input errors
+
+
+@pytest.mark.parametrize("lines", [[], ["", "   "]])
+def test_empty_file(respx_mock, api_key, tmp_path, lines):
+    path = tmp_path / "empty.txt"
+    path.write_text("\n".join(lines))
+    result = runner.invoke(app, ["batch", "submit", str(path)])
+    assert result.exit_code == 1
+    assert result.stderr == f"Error: No email addresses in {path}.\n"
+    assert not respx_mock.calls
+
+
+def test_empty_stdin(respx_mock, api_key):
+    result = runner.invoke(app, ["batch", "submit", "-"], input="")
+    assert result.exit_code == 1
+    assert result.stderr == "Error: No email addresses in stdin.\n"
+
+
+def test_too_many_addresses(respx_mock, api_key, tmp_path):
+    path = write_emails(tmp_path, many(10_001))
+    result = runner.invoke(app, ["batch", "submit", path, "--yes"])
+    assert result.exit_code == 1
+    assert result.stderr == "Error: emails must hold 1 to 10,000 addresses (got 10,001)\n"
+    assert not respx_mock.calls
+
+
+def test_missing_file(respx_mock, api_key, tmp_path):
+    path = tmp_path / "nope.txt"
+    result = runner.invoke(app, ["batch", "submit", str(path)])
+    assert result.exit_code == 1
+    assert result.stderr == f"Error: File not found: {path}\n"
+    assert not respx_mock.calls
+
+
+# submit --wait
+
+
+def wait_routes(respx_mock, *statuses: httpx.Response):
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    return respx_mock.get(STATUS).mock(side_effect=list(statuses))
+
+
+def test_wait_prints_json_results(respx_mock, api_key, tmp_path, clock):
+    wait_routes(
+        respx_mock,
+        status_response("batch_status_processing"),
+        status_response("batch_status_completed"),
+    )
+    serve_results(respx_mock, "batch_results_json_all")
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, EMAILS), "--wait"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == json_rows()
+    assert result.stderr.splitlines() == [
+        "This will use up to 3 credits.",
+        "Submitted batch 1457 (3 emails)",
+        PROCESSING,
+        COMPLETED,
+    ]
+    assert clock.sleeps == [3.0]
+
+
+def test_wait_ignores_global_json(respx_mock, api_key, tmp_path, clock):
+    wait_routes(respx_mock, status_response("batch_status_completed"))
+    serve_results(respx_mock, "batch_results_json_all")
+    path = write_emails(tmp_path, EMAILS)
+    result = runner.invoke(app, ["--json", "batch", "submit", path, "--wait"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == json_rows()
+
+
+def test_wait_csv(respx_mock, api_key, tmp_path, clock):
+    wait_routes(respx_mock, status_response("batch_status_completed"))
+    serve_results(respx_mock, "batch_results_csv_all", format_="csv")
+    path = write_emails(tmp_path, EMAILS)
+    args = ["batch", "submit", path, "--wait", "--format", "csv", "--filter", "all"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0
+    assert result.stdout == csv_text()
+
+
+def test_wait_timeout(respx_mock, api_key, tmp_path, clock):
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    serve(respx_mock, "batch_status_processing", STATUS)
+    path = write_emails(tmp_path, EMAILS)
+    result = runner.invoke(app, ["batch", "submit", path, "--wait", "--timeout", "5"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.splitlines()[-1] == (
+        'Error: Batch 1457 still "processing" after 5s. '
+        "Check later with: mailtester batch status 1457"
+    )
+    assert sum(clock.sleeps) == 5
+
+
+def test_wait_interrupted(respx_mock, api_key, tmp_path, monkeypatch):
+    def interrupt(seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(MailTester, "_sleep", staticmethod(interrupt))
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    serve(respx_mock, "batch_status_processing", STATUS)
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, EMAILS), "--wait"])
+    assert result.exit_code == 130
+    assert result.stderr.splitlines()[-1] == (
+        "Stopped waiting. Batch 1457 is still running. Check it with: mailtester batch status 1457"
+    )
+
+
+# status
+
+
+def test_status_processing(respx_mock, api_key):
+    serve(respx_mock, "batch_status_processing", STATUS)
+    result = runner.invoke(app, ["batch", "status", "1457"])
+    assert result.exit_code == 0
+    assert result.stdout == f"{PROCESSING}\n"
+
+
+def test_status_completed(respx_mock, api_key):
+    serve(respx_mock, "batch_status_completed", STATUS)
+    result = runner.invoke(app, ["batch", "status", "1457"])
+    assert result.exit_code == 0
+    assert result.stdout == f"{COMPLETED}\n  valid 0  invalid 1  unknown 0\n"
+
+
+def test_status_formats_large_counts_and_missing_values(respx_mock, api_key):
+    respx_mock.get(STATUS).mock(
+        side_effect=[
+            status_response(
+                "batch_status_processing", progress=64, processed_emails=640, total_emails=1000
+            ),
+            status_response("batch_status_processing", progress=None, processed_emails=None),
+        ]
+    )
+    first = runner.invoke(app, ["batch", "status", "1457"])
+    second = runner.invoke(app, ["batch", "status", "1457"])
+    assert first.stdout == "Batch 1457  processing  64%  (640/1,000)\n"
+    assert second.stdout == "Batch 1457  processing  -  (-/3)\n"
+
+
+def test_status_json(respx_mock, api_key):
+    serve(respx_mock, "batch_status_completed", STATUS)
+    result = runner.invoke(app, ["--json", "batch", "status", "1457"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == fixture_data("batch_status_completed")
+
+
+def test_status_not_found(respx_mock, api_key):
+    serve(respx_mock, "error_404", f"{BASE_URL}/verify/batch/999999999")
+    result = runner.invoke(app, ["batch", "status", "999999999"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == "Error: Bulk verification not found\n"
+
+
+def test_status_rejects_non_numeric_id(respx_mock, api_key):
+    result = runner.invoke(app, ["batch", "status", "abc"])
+    assert result.exit_code == 2
+    assert not respx_mock.calls
+
+
+# results
+
+
+def test_results_default_json(respx_mock, api_key):
+    serve_results(respx_mock, "batch_results_json_all")
+    result = runner.invoke(app, ["batch", "results", "1457"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == json_rows()
+
+
+def test_results_filter_risky(respx_mock, api_key):
+    route = serve_results(respx_mock, "batch_results_json_risky", filter_="risky")
+    result = runner.invoke(app, ["batch", "results", "1457", "--filter", "risky"])
+    assert result.exit_code == 0
+    assert route.called
+    rows = json.loads(result.stdout)
+    assert len(rows) == 2
+    assert rows == json_rows("batch_results_json_risky")
+
+
+def test_results_csv(respx_mock, api_key):
+    serve_results(respx_mock, "batch_results_csv_all", format_="csv")
+    result = runner.invoke(app, ["batch", "results", "1457", "--format", "csv"])
+    assert result.exit_code == 0
+    assert result.stdout == csv_text()
+
+
+def test_results_empty(respx_mock, api_key):
+    serve_results(respx_mock, "batch_results_json_valid", filter_="valid")
+    result = runner.invoke(app, ["batch", "results", "1457", "--filter", "valid"])
+    assert result.exit_code == 0
+    assert result.stdout == "[]\n"
+
+
+def test_results_ignores_global_json(respx_mock, api_key):
+    serve_results(respx_mock, "batch_results_csv_all", format_="csv")
+    result = runner.invoke(app, ["--json", "batch", "results", "1457", "--format", "csv"])
+    assert result.stdout == csv_text()
+
+
+@pytest.mark.parametrize("option", ["--filter", "--format"])
+def test_results_bad_choice(respx_mock, api_key, option):
+    result = runner.invoke(app, ["batch", "results", "1457", option, "bogus"])
+    assert result.exit_code == 2
+    assert not respx_mock.calls
+
+
+def test_results_not_found(respx_mock, api_key):
+    serve(respx_mock, "error_404", f"{BASE_URL}/verify/batch/999999999/results")
+    result = runner.invoke(app, ["batch", "results", "999999999"])
+    assert result.exit_code == 1
+    assert result.stderr == "Error: Bulk verification not found\n"
