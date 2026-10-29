@@ -107,8 +107,8 @@ The finder tries several address patterns. Use `--json` to see every candidate.
 
 ```text
 $ mailtester lists
-ID     NAME        STATUS      EMAILS  VALID  INVALID  RISKY  CREATED
-1287   Q3 leads    completed    1,000    820       90     60  2026-10-01
+ID    NAME      STATUS     EMAILS  VALID  INVALID  RISKY  CREATED
+1287  Q3 leads  completed   1,000    820       90     60  2026-10-01
 
 $ mailtester credits
 Balance    5,000 credits
