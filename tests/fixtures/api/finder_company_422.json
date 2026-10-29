@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/finder/company",
+    "params": {},
+    "json": {}
+  },
+  "status": 422,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "54",
+    "x-ratelimit-reset": "1793313300",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": false,
+    "errors": {
+      "company": [
+        "The company field is required."
+      ]
+    }
+  },
+  "synthetic": false
+}

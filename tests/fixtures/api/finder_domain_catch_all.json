@@ -1,0 +1,110 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/finder/domain",
+    "params": {},
+    "json": {
+      "domain": "example.net"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "46",
+    "x-ratelimit-reset": "1793313300",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": true,
+    "data": {
+      "domain": "example.net",
+      "emails": [
+        {
+          "email": "info@example.net",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": true,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "contact@example.net",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": true,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "hello@example.net",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": true,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "support@example.net",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": true,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "sales@example.net",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": true,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "admin@example.net",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": true,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "team@example.net",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": true,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "office@example.net",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": true,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "help@example.net",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": true,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "service@example.net",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": true,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        }
+      ],
+      "total": 20,
+      "limit": 10,
+      "offset": 0,
+      "credits_used": 3
+    }
+  },
+  "synthetic": false
+}

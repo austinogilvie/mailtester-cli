@@ -7,11 +7,14 @@
   },
   "status": 404,
   "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "39",
+    "x-ratelimit-reset": "1793313300",
     "content-type": "application/json"
   },
   "body": {
     "success": false,
     "error": "List not found"
   },
-  "synthetic": true
+  "synthetic": false
 }

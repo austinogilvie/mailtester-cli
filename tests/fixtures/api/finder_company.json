@@ -1,0 +1,70 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/finder/company",
+    "params": {},
+    "json": {
+      "company": "Acme"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "50",
+    "x-ratelimit-reset": "1793313300",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": true,
+    "data": {
+      "company": "Acme",
+      "domain": "example.com",
+      "emails": [
+        {
+          "email": "info@example.com",
+          "status": "risky",
+          "confidence": 55,
+          "is_role": true,
+          "is_catch_all": false,
+          "reason": "ROLE_ACCOUNT"
+        },
+        {
+          "email": "contact@example.com",
+          "status": "risky",
+          "confidence": 55,
+          "is_role": true,
+          "is_catch_all": false,
+          "reason": "ROLE_ACCOUNT"
+        },
+        {
+          "email": "support@example.com",
+          "status": "risky",
+          "confidence": 55,
+          "is_role": true,
+          "is_catch_all": false,
+          "reason": "ROLE_ACCOUNT"
+        },
+        {
+          "email": "sales@example.com",
+          "status": "risky",
+          "confidence": 55,
+          "is_role": true,
+          "is_catch_all": false,
+          "reason": "ROLE_ACCOUNT"
+        },
+        {
+          "email": "team@example.com",
+          "status": "risky",
+          "confidence": 55,
+          "is_role": true,
+          "is_catch_all": false,
+          "reason": "ROLE_ACCOUNT"
+        }
+      ],
+      "total": 5,
+      "limit": 10,
+      "credits_used": 3
+    }
+  },
+  "synthetic": false
+}

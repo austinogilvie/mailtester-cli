@@ -1,0 +1,29 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/finder/company",
+    "params": {},
+    "json": {
+      "company": "Nowhere"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "48",
+    "x-ratelimit-reset": "1793313300",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": true,
+    "data": {
+      "company": "Nowhere",
+      "domain": "example.org",
+      "emails": [],
+      "total": 0,
+      "limit": 10,
+      "credits_used": 3
+    }
+  },
+  "synthetic": false
+}

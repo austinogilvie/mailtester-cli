@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/finder/domain",
+    "params": {},
+    "json": {}
+  },
+  "status": 422,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "55",
+    "x-ratelimit-reset": "1793313240",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": false,
+    "errors": {
+      "domain": [
+        "The domain field is required."
+      ]
+    }
+  },
+  "synthetic": false
+}
