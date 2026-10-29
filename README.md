@@ -70,11 +70,12 @@ mailtester --json verify jane@acme.com | jq .result
 
 ### Verify a batch
 
-The input file holds one address per line. Use `-` to read from stdin.
+The input file holds one address per line, and blank lines are skipped. `batch submit` prints the cost to stderr. For 100 or more addresses it asks before submitting, unless you pass `--yes`. Use `-` to read from stdin, which needs `--yes` for 100 or more addresses because stdin can't answer the prompt.
 
 ```text
 $ mailtester batch submit leads.txt --name "Q3 leads"
-This will use up to 1,000 credits. Continue? [y/N]: y
+This will use up to 1,000 credits.
+Continue? [y/N]: y
 Submitted batch 1287 (1,000 emails)
 
 $ mailtester batch status 1287
@@ -88,7 +89,7 @@ $ mailtester batch results 1287 --filter risky --format csv > risky.csv
 
 Batch results don't always match single `verify` results. The API scores batch rows on a different scale (the same risky address can score 5 in a batch and 50 in `verify`). Batch rows also leave out `mx_records`, `spamtrap`, and `did_you_mean`. The CLI shows what the API returns.
 
-Or submit and wait in one step:
+Or submit and wait in one step. `--wait` polls until the batch completes, shows progress on stderr, and writes the results to stdout. It takes the same `--filter` and `--format` options as `batch results`. It gives up after `--timeout` seconds (default 1800), but the batch keeps running, and you can check it later with `batch status`.
 
 ```bash
 mailtester batch submit leads.txt --wait --yes > results.json
