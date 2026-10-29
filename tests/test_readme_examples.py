@@ -4,13 +4,15 @@ Where the README shows illustrative values the fixtures don't have, these tests 
 fixture copies with those values, or check types. The README stays as written.
 """
 
+from datetime import datetime
+
 import httpx
 import pytest
 from conftest import load_fixture, serve
 
 from mailtester_cli import MailTester
 from mailtester_cli.client import BASE_URL
-from mailtester_cli.models import BatchJob, FinderCandidate, ListJob, VerifyResult
+from mailtester_cli.models import BatchJob, FinderCandidate, ListJob, ListPage, VerifyResult
 
 
 @pytest.fixture
@@ -114,6 +116,31 @@ def test_find_lists_credits(respx_mock, mt):
         assert isinstance(job.status, str)
 
     assert mt.credits().balance == 5000
+
+
+def test_lists_pages_show_delete(respx_mock, mt):
+    # Specific routes first: respx matches in registration order.
+    lists_url = f"{BASE_URL}/lists"
+    serve(respx_mock, "lists_page_2", lists_url, params__eq={"page": "2"})
+    serve(respx_mock, "lists_after_batch", lists_url, params__eq={"per_page": "100", "page": "1"})
+    serve(respx_mock, "lists_after_batch", lists_url)
+    results = {**load_fixture("list_show")[2]["data"]["results"], "valid": 820}
+    route_with(respx_mock, "GET", f"{BASE_URL}/lists/1287", "list_show", id=1287, results=results)
+    serve(respx_mock, "list_delete", f"{BASE_URL}/lists/1287", method="DELETE")
+
+    for job in mt.lists():
+        assert isinstance(job, ListJob)
+
+    page = mt.lists_page(page=2)
+    assert isinstance(page, ListPage)
+    assert page.current_page == 2
+    assert [j.id for j in mt.iter_lists()] == [1457]
+
+    job = mt.get_list(1287)
+    assert job.results.valid == 820
+    assert isinstance(job.completed_at, datetime)
+
+    assert mt.delete_list(1287) == "List deleted"
 
 
 def test_errors(respx_mock, mt):

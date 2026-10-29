@@ -1,8 +1,9 @@
 """Typed response models for the MailTester API.
 
-Each model is a frozen dataclass built from the API's `data` payload with `from_dict`.
-Required keys raise `KeyError` when missing, optional keys default to `None`, unknown keys
-are ignored, and `raw` keeps the untouched payload. Values are passed through unchanged.
+Each model is a frozen dataclass built from the API's `data` payload with `from_dict`
+(`ListPage` takes the whole body with `from_body`). Required keys raise `KeyError` when
+missing, optional keys default to `None`, unknown keys are ignored, and `raw` keeps the
+untouched payload. Values are passed through unchanged.
 """
 
 from __future__ import annotations
@@ -213,6 +214,30 @@ class ListJob:
             started_at=_parse_datetime(data.get("started_at")),
             completed_at=_parse_datetime(data.get("completed_at")),
             raw=data,
+        )
+
+
+@dataclass(frozen=True)
+class ListPage:
+    """One page of `GET /lists`: its items plus the `meta` pagination block. `raw` is the body."""
+
+    items: list[ListJob]
+    current_page: int
+    last_page: int
+    per_page: int
+    total: int
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_body(cls, body: dict) -> ListPage:
+        meta = body["meta"]
+        return cls(
+            items=[ListJob.from_dict(item) for item in body["data"]],
+            current_page=meta["current_page"],
+            last_page=meta["last_page"],
+            per_page=meta["per_page"],
+            total=meta["total"],
+            raw=body,
         )
 
 

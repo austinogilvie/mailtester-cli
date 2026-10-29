@@ -67,7 +67,8 @@ def test_lists_json(respx_mock, api_key, name):
 def test_lists_missing_name_and_large_counts(respx_mock, api_key):
     data = fixture_data("lists_after_batch")
     data[0].update(name=None, total_emails=1000, created_at="2026-10-01T23:30:00-02:00")
-    respond(respx_mock, LISTS, data)
+    body = {**load_fixture("lists_after_batch")[2], "data": data}  # keeps the real meta block
+    respx_mock.get(LISTS).respond(200, json=body)
     result = runner.invoke(app, ["lists"])
     assert result.exit_code == 0
     assert result.stdout.splitlines() == [

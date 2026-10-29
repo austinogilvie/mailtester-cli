@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,7 +25,14 @@ from mailtester_cli.errors import (
     RateLimitError,
     error_from_response,
 )
-from mailtester_cli.models import BatchJob, Credits, FinderResult, ListJob, VerifyResult
+from mailtester_cli.models import (
+    BatchJob,
+    Credits,
+    FinderResult,
+    ListJob,
+    ListPage,
+    VerifyResult,
+)
 
 BASE_URL = "https://app.mailtester.com/api/v1"
 ENV_VAR = "MAILTESTER_API_KEY"
@@ -115,6 +122,19 @@ def _parse(build: Callable[[Any], T], data: Any) -> T:
         ) from exc
 
 
+def _json_object(response: httpx.Response) -> dict:
+    """The response's JSON body, or a MailTesterError when it isn't a JSON object."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        raise MailTesterError(
+            "Unexpected response from MailTester", status_code=response.status_code, body=None
+        )
+    return body
+
+
 class MailTester:
     """Client for the MailTester REST API."""
 
@@ -189,6 +209,20 @@ class MailTester:
             raise error_from_response(response)
         return response
 
+    def _body(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json: Any = None,
+        data: dict | None = None,
+        files: dict | None = None,
+    ) -> dict:
+        """Run a request and return its whole JSON body, for responses with no `data` key."""
+        response = self._request(method, path, params=params, json=json, data=data, files=files)
+        return _json_object(response)
+
     def _data(
         self,
         method: str,
@@ -199,16 +233,14 @@ class MailTester:
         data: dict | None = None,
         files: dict | None = None,
     ) -> Any:
+        """Run a request and return the `data` member of its JSON body."""
         response = self._request(method, path, params=params, json=json, data=data, files=files)
-        try:
-            body = response.json()
-        except ValueError:
-            body = None
-        if not isinstance(body, dict) or "data" not in body:
+        body = _json_object(response)
+        if "data" not in body:
             raise MailTesterError(
                 "Unexpected response from MailTester",
                 status_code=response.status_code,
-                body=body if isinstance(body, dict) else None,
+                body=body,
             )
         return body["data"]
 
@@ -228,11 +260,47 @@ class MailTester:
         body = {"first_name": first_name, "last_name": last_name, "domain": domain}
         return _parse(FinderResult.from_dict, self._data("POST", "/finder/email", json=body))
 
-    def lists(self, *, per_page: int | None = None) -> list[ListJob]:
-        """Return the first page of verification lists."""
-        params = {"per_page": per_page} if per_page is not None else None
-        data = self._data("GET", "/lists", params=params)
-        return _parse(lambda items: [ListJob.from_dict(item) for item in items], data)
+    def lists_page(self, *, page: int | None = None, per_page: int | None = None) -> ListPage:
+        """Return one page of verification lists with its `meta` pagination block.
+
+        `page` (from 1) and `per_page` (1-100, default 25) are sent only when given.
+        """
+        params: dict[str, Any] = {}
+        if page is not None:
+            params["page"] = page
+        if per_page is not None:
+            params["per_page"] = per_page
+        body = self._body("GET", "/lists", params=params or None)
+        return _parse(ListPage.from_body, body)
+
+    def lists(self, *, page: int | None = None, per_page: int | None = None) -> list[ListJob]:
+        """Return one page of verification lists, the first by default."""
+        return self.lists_page(page=page, per_page=per_page).items
+
+    def iter_lists(self, *, per_page: int = 100) -> Iterator[ListJob]:
+        """Yield every list, page by page, `per_page` (1-100) per request. No sleeping.
+
+        The page count comes from page 1's `meta.last_page`; an empty page ends the walk early.
+        """
+        first = self.lists_page(page=1, per_page=per_page)
+        yield from first.items
+        for page in range(2, first.last_page + 1):
+            items = self.lists_page(page=page, per_page=per_page).items
+            if not items:
+                return
+            yield from items
+
+    def get_list(self, list_id: int | str) -> ListJob:
+        """Return one list by id, in the `lists` item shape."""
+        return _parse(ListJob.from_dict, self._data("GET", f"/lists/{list_id}"))
+
+    def delete_list(self, list_id: int | str) -> str:
+        """Delete a list and its results. Returns the API's message, `"List deleted"`, or `""`.
+
+        Raises NotFoundError for an unknown id and ConflictError while the list is processing.
+        """
+        message = self._body("DELETE", f"/lists/{list_id}").get("message")
+        return message if isinstance(message, str) else ""
 
     def credits(self) -> Credits:
         """Return the account's credit balance."""

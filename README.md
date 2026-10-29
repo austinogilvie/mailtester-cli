@@ -209,8 +209,18 @@ match.status         # "valid"
 match.confidence     # 95
 match.candidates     # list[FinderCandidate], one per pattern tried
 
-for job in mt.lists():
+for job in mt.lists():                   # the first page, 25 lists
     print(job.id, job.name, job.status)
+
+page = mt.lists_page(page=2)             # ListPage: .items plus .current_page, .last_page, .total
+for job in mt.iter_lists():              # every page, 100 lists per request
+    ...
+
+job = mt.get_list(1287)                  # one ListJob, with per-verdict counts and timestamps
+job.results.valid                        # 820
+job.completed_at                         # datetime, or None until the list completes
+
+mt.delete_list(1287)                     # "List deleted"; raises ConflictError while processing
 
 mt.credits().balance  # 5000
 ```
@@ -243,7 +253,7 @@ except MailTesterError as e:
 | Module | Contents |
 |---|---|
 | `mailtester_cli.client` | `MailTester`, the API client. Also importable from `mailtester_cli`. |
-| `mailtester_cli.models` | `VerifyResult`, `FinderResult`, `BatchJob`, `ListJob`, `Credits`, and other response types |
+| `mailtester_cli.models` | `VerifyResult`, `FinderResult`, `BatchJob`, `ListJob`, `ListPage`, `Credits`, and other response types |
 | `mailtester_cli.errors` | `MailTesterError` and its subclasses |
 | `mailtester_cli.cli` | The `mailtester` Typer app |
 

@@ -110,9 +110,17 @@ def test_free_run_writes_redacted_fixtures(respx_mock, monkeypatch, tmp_path):
         headers=headers,
     )
     respx_mock.get("/lists").respond(
-        200, json={"success": True, "data": [{"id": 1, "name": "Client leads"}]}
+        200,
+        json={
+            "success": True,
+            "data": [{"id": 1, "name": "Client leads"}],
+            "meta": {"current_page": 1, "last_page": 2, "per_page": 5, "total": 7},
+        },
     )
     respx_mock.get("/verify/batch/999999999").respond(
+        404, json={"success": False, "error": "List not found"}
+    )
+    respx_mock.get("/lists/999999999").respond(
         404, json={"success": False, "error": "List not found"}
     )
     respx_mock.post("/verify/batch").respond(
@@ -126,9 +134,19 @@ def test_free_run_writes_redacted_fixtures(respx_mock, monkeypatch, tmp_path):
         "credits_before.json",
         "error_401.json",
         "error_404.json",
+        "error_404_list.json",
         "error_422.json",
         "lists.json",
+        "lists_page_2.json",
+        "lists_past_last_page.json",
     ]
+    page_2 = json.loads((tmp_path / "lists_page_2.json").read_text())
+    assert page_2["request"]["params"] == {"per_page": 1, "page": 2}
+    past = json.loads((tmp_path / "lists_past_last_page.json").read_text())
+    assert past["request"]["params"] == {"per_page": 1, "page": 8}
+    not_found = json.loads((tmp_path / "error_404_list.json").read_text())
+    assert not_found["status"] == 404
+    assert not_found["request"]["path"] == "/lists/999999999"
     credits = json.loads((tmp_path / "credits_before.json").read_text())
     assert credits["status"] == 200
     assert credits["request"] == {"method": "GET", "path": "/credits", "params": {}, "json": None}
@@ -152,6 +170,9 @@ def test_paid_step_failure_stops_further_spending(respx_mock, monkeypatch, tmp_p
     respx_mock.post("/verify").respond(500, json={"success": False, "error": "Verification failed"})
     finder = respx_mock.post("/finder/email").respond(200, json={"success": True, "data": {}})
     respx_mock.get("/verify/batch/999999999").respond(404, json={"success": False})
+    respx_mock.get("/lists/999999999").respond(
+        404, json={"success": False, "error": "List not found"}
+    )
     respx_mock.post("/verify/batch").respond(422, json={"success": False, "errors": {}})
 
     argv = [
@@ -203,7 +224,21 @@ def free_routes(respx_mock) -> None:
     respx_mock.get("/credits").respond(200, json={"success": True, "data": {"balance": 10}})
     respx_mock.get("/lists").respond(200, json={"success": True, "data": []})
     respx_mock.get("/verify/batch/999999999").respond(404, json={"success": False})
+    respx_mock.get("/lists/999999999").respond(
+        404, json={"success": False, "error": "List not found"}
+    )
     respx_mock.post("/verify/batch").respond(422, json={"success": False, "errors": {}})
+
+
+def throwaway_routes(respx_mock, list_id: int):
+    """GET and DELETE /lists/{id} for the pending batch discover.py creates and removes."""
+    show = respx_mock.get(f"/lists/{list_id}").respond(
+        200, json={"success": True, "data": {"id": list_id, "status": "pending"}}
+    )
+    delete = respx_mock.delete(f"/lists/{list_id}").respond(
+        200, json={"success": True, "message": "List deleted"}
+    )
+    return show, delete
 
 
 def test_save_describes_multipart_request_instead_of_json(tmp_path):
@@ -308,13 +343,13 @@ def test_binary_upload_with_no_start_is_still_allowed(respx_mock, monkeypatch, t
     upload = respx_mock.post("/verify/batch/upload").respond(
         201, json=upload_body(id=1497, status="pending")
     )
-    respx_mock.delete("/lists/1497").respond(200, json={"success": True})
+    _, delete = throwaway_routes(respx_mock, 1497)
     xlsx = tmp_path / "leads.xlsx"
     xlsx.write_bytes(XLSX_HEAD)
 
     assert discover.main(["--upload", str(xlsx), "--no-start", "--out", str(tmp_path)]) == 0
 
-    assert upload.called
+    assert upload.called and delete.called
     assert b'name="auto_start"\r\n\r\n0' in upload.calls.last.request.content
 
 
@@ -368,16 +403,14 @@ def test_no_start_upload_is_free_recorded_and_deleted(respx_mock, monkeypatch, t
     upload = respx_mock.post("/verify/batch/upload").respond(
         201, json=upload_body(id=1495, status="pending", total_emails=1)
     )
-    delete = respx_mock.delete("/lists/1495").respond(
-        200, json={"success": True, "message": "List deleted"}
-    )
+    show, delete = throwaway_routes(respx_mock, 1495)
     status = respx_mock.get("/verify/batch/1495").respond(200, json=upload_body(id=1495))
     csv = tmp_path / "one.csv"
     csv.write_text("alice@acmecorp.io\n")  # not "one@": its local part would "leak" via one.csv
 
     assert discover.main(["--upload", str(csv), "--no-start", "--out", str(tmp_path)]) == 0
 
-    assert upload.called and delete.called and not status.called
+    assert upload.called and show.called and delete.called and not status.called
     body = upload.calls.last.request.content
     assert b'name="auto_start"\r\n\r\n0' in body
     assert b'filename="one.csv"' in body
@@ -387,7 +420,15 @@ def test_no_start_upload_is_free_recorded_and_deleted(respx_mock, monkeypatch, t
     assert record["body"]["data"]["status"] == "pending"
     names = {p.name for p in tmp_path.iterdir()}
     assert "credits_after.json" not in names  # nothing was spent
-    assert not any(n.startswith(("batch_status_", "list_delete")) for n in names)
+    assert not any(n.startswith("batch_status_") for n in names)
+    assert {"list_show_pending.json", "list_delete.json"} <= names
+    show_record = json.loads((tmp_path / "list_show_pending.json").read_text())
+    assert show_record["request"] == {
+        "method": "GET",
+        "path": "/lists/1495",
+        "params": {},
+        "json": None,
+    }
 
 
 @respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
@@ -455,7 +496,7 @@ def test_xlsx_upload_takes_the_xlsx_name(respx_mock, monkeypatch, tmp_path):
     free_routes(respx_mock)
     pending = upload_body(id=1497, status="pending")
     respx_mock.post("/verify/batch/upload").respond(201, json=pending)
-    delete = respx_mock.delete("/lists/1497").respond(200, json={"success": True})
+    _, delete = throwaway_routes(respx_mock, 1497)
     xlsx = tmp_path / "leads.xlsx"
     xlsx.write_bytes(XLSX_HEAD)
 
@@ -473,16 +514,19 @@ def test_no_start_and_callback_url_apply_to_batch_submit(respx_mock, monkeypatch
     respx_mock.get("/credits").respond(200, json={"success": True, "data": {}})
     respx_mock.get("/lists").respond(200, json={"success": True, "data": []})
     respx_mock.get("/verify/batch/999999999").respond(404, json={"success": False})
+    respx_mock.get("/lists/999999999").respond(
+        404, json={"success": False, "error": "List not found"}
+    )
     submit = respx_mock.post("/verify/batch").mock(
         side_effect=[
             httpx.Response(201, json=upload_body(id=1492, status="pending", total_emails=1)),
             httpx.Response(422, json={"success": False, "errors": {}}),
         ]
     )
-    delete = respx_mock.delete("/lists/1492").respond(200, json={"success": True})
+    show, delete = throwaway_routes(respx_mock, 1492)
     status = respx_mock.get("/verify/batch/1492").respond(200, json=upload_body(id=1492))
 
-    argv = ["--spend", "--batch", "me@personal.dev", "--no-start"]
+    argv = ["--batch", "me@personal.dev", "--no-start"]
     argv += ["--callback-url", "https://hooks.example.com/mt", "--out", str(tmp_path)]
     assert discover.main(argv) == 0
 
@@ -493,8 +537,35 @@ def test_no_start_and_callback_url_apply_to_batch_submit(respx_mock, monkeypatch
         "auto_start": False,
         "callback_url": "https://hooks.example.com/mt",
     }
+    assert show.called
     assert delete.called and not status.called
     names = {p.name for p in tmp_path.iterdir()}
     assert "batch_submit_pending.json" in names
     assert "batch_submit.json" not in names
+    assert "credits_after.json" not in names
+    assert {"list_show_pending.json", "list_delete.json"} <= names
     assert not any(n.startswith("batch_status_") for n in names)
+
+
+# lists fixtures (020)
+
+
+def test_planned_cost_skips_no_start_batch():
+    assert discover.planned_cost(discover.parse_args(["--batch", "a@b.co", "--no-start"])) == 0
+    assert discover.planned_cost(discover.parse_args(["--batch", "a@b.co"])) == 1
+
+
+def test_spend_with_only_a_no_start_batch_is_an_error():
+    assert discover.main(["--spend", "--batch", "a@b.co", "--no-start"]) == 2
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_list_pages_fall_back_without_meta(respx_mock, monkeypatch, tmp_path):
+    monkeypatch.setattr(discover, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_realkey123")
+    free_routes(respx_mock)  # its /lists body has no meta
+
+    assert discover.main(["--out", str(tmp_path)]) == 0
+
+    past = json.loads((tmp_path / "lists_past_last_page.json").read_text())
+    assert past["request"]["params"] == {"per_page": 1, "page": 2}
