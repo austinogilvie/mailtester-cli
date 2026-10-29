@@ -3,6 +3,7 @@
 import sys
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import typer
 
@@ -70,6 +71,15 @@ def _read_emails(file: str) -> list[str]:
     except OSError as exc:
         fail(f"Could not read {source}: {exc.strerror or exc}")
     return [line for line in (raw.strip() for raw in text.splitlines()) if line]
+
+
+def _check_callback_url(value: str | None) -> None:
+    """Fail with exit 2 unless `value` is None or an http(s) URL with a host."""
+    if value is None:
+        return
+    parts = urlsplit(value)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        fail("--callback-url must be an http(s) URL.", code=2)
 
 
 def _confirm(question: str) -> bool:
@@ -148,6 +158,9 @@ def submit(
     ctx: typer.Context,
     file: str = typer.Argument(..., help="File with one address per line, or - for stdin."),
     name: str | None = typer.Option(None, "--name", help="A name for the batch."),
+    callback_url: str | None = typer.Option(
+        None, "--callback-url", help="URL the API calls when the batch completes."
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
     wait: bool = typer.Option(False, "--wait", help="Wait for completion and print results."),
     timeout: int | None = typer.Option(
@@ -160,6 +173,7 @@ def submit(
     format_: ResultFormat | None = WAIT_FORMAT_OPTION,
 ) -> None:
     """Submit addresses for bulk verification. (1 credit per address)"""
+    _check_callback_url(callback_url)
     if not wait and (timeout, filter_, format_) != (None, None, None):
         fail("--timeout, --filter, and --format only apply with --wait.", code=2)
     emails = _read_emails(file)
@@ -178,7 +192,7 @@ def submit(
             raise typer.Exit(1)
 
     with handle_errors(), client() as mt:
-        job = mt.submit_batch(emails, name=name)
+        job = mt.submit_batch(emails, name=name, callback_url=callback_url)
         submitted = f"Submitted batch {job.id} ({fmt_int(job.total_emails)} emails)"
         if not wait:
             if get_state(ctx).json:

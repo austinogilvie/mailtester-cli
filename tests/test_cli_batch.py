@@ -125,6 +125,88 @@ def test_submit_json(respx_mock, api_key, tmp_path):
     assert json.loads(result.stdout) == fixture_data("batch_submit")
 
 
+# --callback-url
+
+HOOK = "https://hooks.example.com/mt"
+
+
+def test_submit_callback_url_is_sent(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    path = write_emails(tmp_path, EMAILS)
+    result = runner.invoke(app, ["batch", "submit", path, "--callback-url", HOOK])
+    assert result.exit_code == 0
+    assert sent_json(route) == {"emails": EMAILS, "callback_url": HOOK}
+
+
+def test_submit_callback_url_with_name(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    path = write_emails(tmp_path, EMAILS)
+    args = ["batch", "submit", path, "--name", "discovery", "--callback-url", HOOK]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0
+    assert sent_json(route) == {"emails": EMAILS, "name": "discovery", "callback_url": HOOK}
+
+
+def test_submit_callback_url_uppercase_scheme(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    path = write_emails(tmp_path, EMAILS)
+    upper = "HTTPS://hooks.example.com/mt"
+    result = runner.invoke(app, ["batch", "submit", path, "--callback-url", upper])
+    assert result.exit_code == 0
+    assert sent_json(route) == {"emails": EMAILS, "callback_url": upper}
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["nope", "ftp://hooks.example.com/mt", "mailto:ops@example.com", "https://", "http:///path"],
+)
+def test_submit_callback_url_rejects_non_http(respx_mock, guard, api_key, tmp_path, url):
+    path = write_emails(tmp_path, EMAILS)
+    result = runner.invoke(app, ["batch", "submit", path, "--callback-url", url])
+    assert result.exit_code == 2
+    assert result.stderr == "Error: --callback-url must be an http(s) URL.\n"
+    assert result.stdout == ""
+    assert not guard.called
+
+
+def test_submit_callback_url_checked_before_file(respx_mock, guard, api_key, tmp_path):
+    path = tmp_path / "nope.txt"
+    result = runner.invoke(app, ["batch", "submit", str(path), "--callback-url", "nope"])
+    assert result.exit_code == 2
+    assert result.stderr == "Error: --callback-url must be an http(s) URL.\n"
+    assert not guard.called
+
+
+def test_submit_callback_url_independent_of_wait(respx_mock, api_key, tmp_path, clock):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    serve(respx_mock, "batch_status_completed", STATUS)
+    serve_results(respx_mock, "batch_results_json_all")
+    path = write_emails(tmp_path, EMAILS)
+    result = runner.invoke(app, ["batch", "submit", path, "--callback-url", HOOK, "--wait"])
+    assert result.exit_code == 0
+    assert sent_json(route)["callback_url"] == HOOK
+    assert json.loads(result.stdout) == json_rows()
+
+
+def test_submit_callback_url_api_rejection(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "error_422_callback_url", SUBMIT, method="POST")
+    path = write_emails(tmp_path, EMAILS)
+    result = runner.invoke(app, ["batch", "submit", path, "--callback-url", HOOK])
+    msg = load_fixture("error_422_callback_url")[2]["errors"]["callback_url"][0]
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.endswith(f"Error: callback_url: {msg}\n")
+
+
+def test_submit_help_lists_callback_url(respx_mock, guard, api_key):
+    # A wide terminal keeps Rich from wrapping the help text mid-sentence.
+    result = runner.invoke(app, ["batch", "submit", "--help"], env={"COLUMNS": "120"})
+    assert result.exit_code == 0
+    assert "--callback-url" in result.stdout
+    assert "URL the API calls when the batch completes." in result.stdout
+    assert not guard.called
+
+
 # confirmation
 
 
