@@ -8,10 +8,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
-from dotenv import find_dotenv, load_dotenv
+from dotenv import dotenv_values, find_dotenv
 
 from mailtester_cli import __version__
 from mailtester_cli.errors import (
@@ -31,6 +31,8 @@ MAX_BATCH_EMAILS = 10_000
 # Assumed names: only "processing" and "completed" have been observed.
 FAILURE_STATUSES = frozenset({"failed", "cancelled", "canceled", "error"})
 
+T = TypeVar("T")
+
 
 @dataclass(frozen=True)
 class RateLimit:
@@ -46,8 +48,15 @@ class RateLimit:
         return cls(
             limit=_int_header(headers, "x-ratelimit-limit"),
             remaining=_int_header(headers, "x-ratelimit-remaining"),
-            reset=datetime.fromtimestamp(reset, tz=UTC) if reset is not None else None,
+            reset=_timestamp(reset),
         )
+
+
+def _timestamp(value: int | None) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(value, tz=UTC) if value is not None else None
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def _int_header(headers: httpx.Headers, name: str) -> int | None:
@@ -62,16 +71,35 @@ def _env_key() -> str | None:
     return value or None
 
 
+def _dotenv_key() -> str | None:
+    # Read only our variable; usecwd finds the user's .env after `uv tool install`.
+    value = (dotenv_values(find_dotenv(usecwd=True)).get(ENV_VAR) or "").strip()
+    return value or None
+
+
 def _resolve_key(api_key: str | None) -> str:
-    key = (api_key or "").strip() or _env_key()
-    if key is None:
-        load_dotenv(find_dotenv(usecwd=True))
-        key = _env_key()
+    key = (api_key or "").strip() or _env_key() or _dotenv_key()
     if key is None:
         raise MissingAPIKeyError(
             f"{ENV_VAR} is not set. Set it in your environment or in a .env file."
         )
+    # httpx echoes a rejected header value in its error, so never send a malformed key.
+    if not (key.isascii() and key.isprintable()) or any(c.isspace() for c in key):
+        raise MissingAPIKeyError(
+            f"{ENV_VAR} contains spaces, line breaks, or other invalid characters."
+        )
     return key
+
+
+def _parse(build: Callable[[Any], T], data: Any) -> T:
+    """Build a model from `data`, turning a shape mismatch into a MailTesterError."""
+    try:
+        return build(data)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        detail = f"missing {exc}" if isinstance(exc, KeyError) else str(exc)
+        raise MailTesterError(
+            f"Unexpected response from MailTester: {detail}", body={"data": data}
+        ) from exc
 
 
 class MailTester:
@@ -128,7 +156,7 @@ class MailTester:
                 method, self.base_url + path, params=params, json=json, headers=self._headers
             )
         except httpx.TransportError as exc:
-            detail = str(exc) or type(exc).__name__
+            detail = (str(exc) or type(exc).__name__).replace(self._api_key, "***")
             raise APIConnectionError(f"Could not reach MailTester: {detail}") from exc
         self.rate_limit = RateLimit.from_headers(response.headers)
         if not response.is_success:
@@ -158,21 +186,22 @@ class MailTester:
             body["timeout"] = timeout
         if smtp_check is not None:
             body["smtp_check"] = smtp_check
-        return VerifyResult.from_dict(self._data("POST", "/verify", json=body))
+        return _parse(VerifyResult.from_dict, self._data("POST", "/verify", json=body))
 
     def find_email(self, first_name: str, last_name: str, domain: str) -> FinderResult:
         """Find a person's address at a domain. 3 credits."""
         body = {"first_name": first_name, "last_name": last_name, "domain": domain}
-        return FinderResult.from_dict(self._data("POST", "/finder/email", json=body))
+        return _parse(FinderResult.from_dict, self._data("POST", "/finder/email", json=body))
 
     def lists(self, *, per_page: int | None = None) -> list[ListJob]:
         """Return the first page of verification lists."""
         params = {"per_page": per_page} if per_page is not None else None
-        return [ListJob.from_dict(item) for item in self._data("GET", "/lists", params=params)]
+        data = self._data("GET", "/lists", params=params)
+        return _parse(lambda items: [ListJob.from_dict(item) for item in items], data)
 
     def credits(self) -> Credits:
         """Return the account's credit balance."""
-        return Credits.from_dict(self._data("GET", "/credits"))
+        return _parse(Credits.from_dict, self._data("GET", "/credits"))
 
     def submit_batch(
         self,
@@ -196,11 +225,11 @@ class MailTester:
             body["callback_url"] = callback_url
         if auto_start is not None:
             body["auto_start"] = auto_start
-        return BatchJob.from_dict(self._data("POST", "/verify/batch", json=body))
+        return _parse(BatchJob.from_dict, self._data("POST", "/verify/batch", json=body))
 
     def batch_status(self, batch_id: int | str) -> BatchJob:
         """Return a batch's current status and counts."""
-        return BatchJob.from_dict(self._data("GET", f"/verify/batch/{batch_id}"))
+        return _parse(BatchJob.from_dict, self._data("GET", f"/verify/batch/{batch_id}"))
 
     def wait_for_batch(
         self,
@@ -214,21 +243,22 @@ class MailTester:
         """Poll until the batch is completed, backing off from `interval` to `max_interval`.
 
         Raises BatchFailedError on a failure status and BatchTimeoutError after `timeout`
-        seconds. A 429 waits for `retry_after` (or `max_interval`); other errors propagate.
+        seconds. A 429 waits for `retry_after` (or `max_interval`); if that wait would pass
+        the deadline, the RateLimitError propagates. Other errors propagate too.
         """
+        if interval <= 0 or max_interval <= 0 or timeout < 0:
+            raise ValueError("interval and max_interval must be positive, timeout non-negative")
         deadline = self._clock() + timeout
         delay = interval
-        last: BatchJob | None = None
         while True:
             try:
                 job = self.batch_status(batch_id)
             except RateLimitError as exc:
                 wait = exc.retry_after if exc.retry_after and exc.retry_after > 0 else max_interval
                 if self._clock() + wait > deadline:
-                    raise BatchTimeoutError(last, timeout, batch_id=batch_id) from exc
+                    raise
                 self._sleep(wait)
                 continue
-            last = job
             if on_poll is not None:
                 on_poll(job)
             if job.status == "completed":
@@ -237,7 +267,7 @@ class MailTester:
                 raise BatchFailedError(job)
             remaining = deadline - self._clock()
             if remaining <= 0:
-                raise BatchTimeoutError(job, timeout, batch_id=batch_id)
+                raise BatchTimeoutError(job, timeout)
             self._sleep(min(delay, remaining))
             delay = min(delay * 1.5, max_interval)
 
@@ -245,7 +275,7 @@ class MailTester:
         """Return a batch's result rows. `filter` is all, valid, invalid, risky, or unknown."""
         params = {"format": "json", "filter": filter}
         data = self._data("GET", f"/verify/batch/{batch_id}/results", params=params)
-        return [VerifyResult.from_dict(row) for row in data]
+        return _parse(lambda rows: [VerifyResult.from_dict(row) for row in rows], data)
 
     def batch_results_csv(self, batch_id: int | str, *, filter: str = "all") -> str:
         """Return a batch's results as CSV text with columns email,result,reason."""

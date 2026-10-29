@@ -8,6 +8,7 @@ from mailtester_cli.errors import (
     BatchTimeoutError,
     MailTesterError,
     NotFoundError,
+    RateLimitError,
     ValidationError,
 )
 from mailtester_cli.models import BatchJob, VerifyResult
@@ -197,14 +198,32 @@ def test_wait_times_out_with_last_job(respx_mock, mt, clock):
     assert str(info.value) == 'Batch 1457 still "processing" after 10s'
 
 
-def test_wait_times_out_when_429_wait_passes_deadline(respx_mock, mt, clock):
+def test_wait_reraises_429_when_its_wait_passes_deadline(respx_mock, mt, clock):
     status_route(respx_mock, response("error_429"))
-    with pytest.raises(BatchTimeoutError) as info:
+    with pytest.raises(RateLimitError) as info:
         mt.wait_for_batch(1457, timeout=10)
     assert clock.sleeps == []
-    assert info.value.job is None
-    assert info.value.body is None
-    assert str(info.value) == "Batch 1457 not finished after 10s"
+    assert info.value.retry_after == 30
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"interval": 0}, {"interval": -1}, {"max_interval": 0}, {"timeout": -1}]
+)
+def test_wait_rejects_bad_timing_before_polling(respx_mock, mt, kwargs):
+    route = respx_mock.get(STATUS)
+    with pytest.raises(ValueError):
+        mt.wait_for_batch(1457, **kwargs)
+    assert route.call_count == 0
+
+
+def test_malformed_row_raises_mailtester_error(respx_mock, mt):
+    row = dict(load_fixture("batch_results_json_all")[2]["data"][0])
+    del row["reason"]
+    respx_mock.get(f"{STATUS}/results").respond(200, json={"success": True, "data": [row]})
+    with pytest.raises(MailTesterError) as info:
+        mt.batch_results(1457)
+    assert "missing 'reason'" in str(info.value)
+    assert type(info.value) is MailTesterError
 
 
 @pytest.mark.parametrize("status", ["failed", "cancelled", "canceled", "error"])
