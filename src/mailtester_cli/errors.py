@@ -88,6 +88,17 @@ class BatchTimeoutError(MailTesterError):
         self.timeout = timeout
 
 
+class BatchNotStartedError(MailTesterError):
+    """`wait_for_batch` saw a `pending` batch, which never starts on its own.
+
+    `job` is that BatchJob.
+    """
+
+    def __init__(self, job: BatchJob) -> None:
+        super().__init__(f"Batch {job.id} is pending and won't start on its own", body=job.raw)
+        self.job = job
+
+
 _BY_STATUS: dict[int, type[MailTesterError]] = {
     401: AuthenticationError,
     402: InsufficientCreditsError,
