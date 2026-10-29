@@ -11,6 +11,11 @@ Free calls run by default. Paid calls run only with --spend.
 Pass --batch-id to rerun the free batch reads on an existing batch. --batch is then used
 only for redaction and nothing is submitted.
 
+--upload sends a CSV, TXT, or XLSX file to POST /verify/batch/upload (step 5u). With
+--no-start the batch is created pending, recorded, and deleted again, so it's free:
+
+    uv run python scripts/discover.py --upload leads.csv --no-start
+
 Real addresses, names, and domains are replaced with placeholders before anything is
 written. The API key is never written or printed.
 """
@@ -186,11 +191,25 @@ class Recorder:
         *,
         params: dict[str, Any] | None = None,
         json_body: Any = None,
+        data: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
+        file_name: str | None = None,
         client: httpx.Client | None = None,
         scrub_names: bool = False,
     ) -> httpx.Response:
-        resp = (client or self.client).request(method, path, params=params, json=json_body)
-        self.save(step, name, resp, params=params, json_body=json_body, scrub_names=scrub_names)
+        resp = (client or self.client).request(
+            method, path, params=params, json=json_body, data=data, files=files
+        )
+        self.save(
+            step,
+            name,
+            resp,
+            params=params,
+            json_body=json_body,
+            form=data,
+            file_name=file_name,
+            scrub_names=scrub_names,
+        )
         return resp
 
     def save(
@@ -201,16 +220,24 @@ class Recorder:
         *,
         params: dict[str, Any] | None = None,
         json_body: Any = None,
+        form: dict[str, Any] | None = None,
+        file_name: str | None = None,
         scrub_names: bool = False,
     ) -> None:
         request = resp.request
+        sent: dict[str, Any] = {
+            "method": request.method,
+            "path": request.url.path.removeprefix("/api/v1"),
+            "params": params or {},
+        }
+        if file_name is not None:
+            # A multipart upload: describe the form fields and the file instead of a JSON body.
+            sent["form"] = form or {}
+            sent["file"] = file_name
+        else:
+            sent["json"] = json_body
         record: dict[str, Any] = {
-            "request": {
-                "method": request.method,
-                "path": request.url.path.removeprefix("/api/v1"),
-                "params": params or {},
-                "json": json_body,
-            },
+            "request": sent,
             "status": resp.status_code,
             "headers": {k: resp.headers[k] for k in KEPT_HEADERS if k in resp.headers},
         }
@@ -266,18 +293,76 @@ def run_paid(rec: Recorder, args: argparse.Namespace) -> int | None:
         resp = rec.call("4b", "finder_email_missing", "POST", "/finder/email", json_body=body)
         if not resp.is_success and resp.status_code != 404:
             expect_ok("4b", resp)
+    batch_id = None
     if args.batch and not args.batch_id:
-        body = {"emails": args.batch, "name": "discovery", "auto_start": True}
-        resp = rec.call("5", "batch_submit", "POST", "/verify/batch", json_body=body)
+        body = {"emails": args.batch, "name": "discovery", "auto_start": not args.no_start}
+        if args.callback_url:
+            body["callback_url"] = args.callback_url
+        name = "batch_submit_pending" if args.no_start else "batch_submit"
+        resp = rec.call("5", name, "POST", "/verify/batch", json_body=body)
         expect_ok("5", resp)
         data = _data(resp)
         if not isinstance(data, dict) or "id" not in data:
             raise Stop(f"step 5 response has no data.id (data: {data!r})")
-        return data["id"]
-    return None
+        if args.no_start:
+            delete_list(rec, "5", data["id"])
+        else:
+            batch_id = data["id"]
+    if args.upload:
+        run_upload(rec, args)
+    return batch_id
 
 
-def poll_batch(rec: Recorder, batch_id: int | str, timeout: float) -> str | None:
+def _upload_name(path: Path, no_start: bool, status: int) -> str:
+    if status == 422:
+        return "batch_upload_bad_type"
+    name = "batch_upload"
+    if path.suffix.lower() in (".xls", ".xlsx"):
+        name += "_xlsx"
+    if no_start:
+        name += "_pending"
+    return name
+
+
+def run_upload(rec: Recorder, args: argparse.Namespace) -> None:
+    """Step 5u: upload a file, then poll and fetch its results unless it was left pending."""
+    form: dict[str, str] = {}
+    if args.callback_url:
+        form["callback_url"] = args.callback_url
+    if args.no_start:
+        form["auto_start"] = "0"
+    with args.upload.open("rb") as fh:
+        files = {"file": (args.upload.name, fh)}
+        resp = rec.client.post("/verify/batch/upload", data=form or None, files=files)
+    # The name depends on the status, so this can't go through rec.call.
+    name = _upload_name(args.upload, args.no_start, resp.status_code)
+    rec.save("5u", name, resp, form=form, file_name=args.upload.name)
+    if resp.status_code == 422:
+        return  # batch_upload_bad_type is a fixture we want, not a failure
+    if not resp.is_success:
+        raise Stop(f"step 5u returned {resp.status_code}; not running further paid steps")
+    data = _data(resp)
+    if not isinstance(data, dict) or "id" not in data:
+        raise Stop(f"step 5u response has no data.id (data: {data!r})")
+    if args.no_start:
+        delete_list(rec, "5u", data["id"])
+        return
+    # Not run_batch_reads: that would overwrite the 1457 batch fixtures.
+    poll_batch(rec, data["id"], args.poll_timeout, record=False)
+    path = f"/verify/batch/{data['id']}/results"
+    params = {"format": "json", "filter": "all"}
+    rec.call("7u", "batch_results_json_upload", "GET", path, params=params)
+
+
+def delete_list(rec: Recorder, step: str, list_id: int | str) -> None:
+    """Delete a pending batch so it doesn't linger. Not recorded: list_delete.json covers it."""
+    resp = rec.client.delete(f"/lists/{list_id}")
+    print(f"[{step:>3}] DELETE /lists/{list_id} -> {resp.status_code}  (not recorded)")
+
+
+def poll_batch(
+    rec: Recorder, batch_id: int | str, timeout: float, record: bool = True
+) -> str | None:
     seen: set[str] = set()
     deadline = time.monotonic() + timeout
     delay = 3.0
@@ -292,7 +377,10 @@ def poll_batch(rec: Recorder, batch_id: int | str, timeout: float) -> str | None
         status = data.get("status") if isinstance(data, dict) else None
         if str(status) not in seen:
             seen.add(str(status))
-            rec.save("6", f"batch_status_{_slug(status)}", resp)
+            if record:
+                rec.save("6", f"batch_status_{_slug(status)}", resp)
+            else:
+                print(f"[  6] GET /verify/batch/{batch_id} -> {resp.status_code}  ({status})")
         if not resp.is_success or status in TERMINAL_STATUSES:
             return status
         if time.monotonic() > deadline:
@@ -346,7 +434,34 @@ def build_redactor(args: argparse.Namespace, key: str) -> Redactor:
         r.email(args.verify_email, "verify")
     for i, email in enumerate(args.batch or [], 1):
         r.email(email, f"batch{i}")
+    if args.upload:
+        i = 0
+        for line in _upload_lines(args.upload) or []:
+            addresses = EMAIL_RE.findall(line)
+            if not addresses:
+                continue  # a header row
+            for addr in addresses:
+                i += 1
+                r.email(addr, f"upload{i}")
+            first = line.split(",")[0].strip().strip('"')
+            if re.search(r"[A-Za-z]", first) and not EMAIL_RE.fullmatch(first):
+                r.name(first, f"Person{i}")
     return r
+
+
+def _upload_lines(path: Path) -> list[str] | None:
+    """Non-blank lines of a UTF-8 upload file, or None when it's binary (XLSX)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
+    return [line for line in text.splitlines() if line.strip()]
+
+
+def upload_count(path: Path) -> int:
+    """Rows an upload may be charged for: its non-blank lines, or 1 when we can't count."""
+    lines = _upload_lines(path)
+    return len(lines) if lines is not None else 1
 
 
 def planned_cost(args: argparse.Namespace) -> int:
@@ -354,6 +469,8 @@ def planned_cost(args: argparse.Namespace) -> int:
     cost += FIND_COST * (bool(args.find) + bool(args.find_missing))
     if args.batch and not args.batch_id:
         cost += len(args.batch)
+    if args.upload and not args.no_start:
+        cost += upload_count(args.upload)
     return cost
 
 
@@ -372,6 +489,18 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument("--batch", nargs="+", metavar="EMAIL", help="step 5, 1-3 emails (1 credit each)")
     p.add_argument("--batch-id", help="read an existing batch instead of submitting one")
+    p.add_argument(
+        "--upload",
+        type=Path,
+        metavar="FILE",
+        help="step 5u, a CSV/TXT/XLSX file with 1-3 rows (1 credit each unless --no-start)",
+    )
+    p.add_argument(
+        "--no-start",
+        action="store_true",
+        help="create the --batch/--upload batch with auto_start off, then delete it (free)",
+    )
+    p.add_argument("--callback-url", metavar="URL", help="callback_url for --batch and --upload")
     p.add_argument("--formats", default="csv", help="extra results formats (comma-separated)")
     p.add_argument(
         "--filters",
@@ -388,6 +517,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.upload and not args.upload.is_file():
+        print(f"--upload: {args.upload} is not a file.", file=sys.stderr)
+        return 2
     cost = planned_cost(args)
     if cost and not args.spend:
         print(f"Refusing: these inputs would spend {cost} credits. Add --spend.", file=sys.stderr)
@@ -397,6 +529,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.batch and len(args.batch) > 3:
         print("--batch takes at most 3 emails.", file=sys.stderr)
+        return 2
+    if args.upload and not args.no_start and upload_count(args.upload) > 3:
+        print("--upload takes at most 3 lines unless --no-start is given.", file=sys.stderr)
         return 2
 
     load_dotenv()
@@ -416,7 +551,7 @@ def main(argv: list[str] | None = None) -> int:
         rec.call("2", "lists", "GET", "/lists", params={"per_page": 5}, scrub_names=True)
         batch_id = args.batch_id
         try:
-            if cost:
+            if cost or args.upload:  # a --no-start upload is free but still a step 5u
                 batch_id = run_paid(rec, args) or batch_id
         except Stop as e:
             stopped = str(e)
