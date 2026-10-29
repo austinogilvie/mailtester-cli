@@ -28,6 +28,8 @@ src/mailtester_cli/
 tests/          # pytest suite, never hits the live API
   conftest.py   # load_fixture / load_request / serve / sent_json helpers and the mt fixture
   test_cli_verify_find.py  # verify, find, global --json, error mapping
+  test_cli_account.py      # lists, credits
+  test_cli_batch.py        # batch submit/status/results, --wait with a fake clock
   fixtures/api/ # redacted live responses, plus synthetic 402/429/500/502
 scripts/
   discover.py   # recaptures the fixtures (paid calls need --spend)

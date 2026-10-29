@@ -40,6 +40,12 @@ def api_key(monkeypatch):
 
 
 @pytest.fixture
+def guard(respx_mock):
+    """A catch-all route: any request at all shows up as guard.called."""
+    return respx_mock.route().respond(500)
+
+
+@pytest.fixture
 def clock(monkeypatch):
     fake = FakeClock()
     monkeypatch.setattr(MailTester, "_sleep", staticmethod(fake.sleep))
@@ -122,14 +128,14 @@ def test_submit_json(respx_mock, api_key, tmp_path):
 # confirmation
 
 
-def test_confirm_declined(respx_mock, api_key, tmp_path):
+def test_confirm_declined(respx_mock, guard, api_key, tmp_path):
     path = write_emails(tmp_path, many(100))
     result = runner.invoke(app, ["batch", "submit", path], input="n\n")
     assert result.exit_code == 1
     assert result.stderr.startswith("This will use up to 100 credits.\nContinue? [y/N]:")
     assert result.stderr.endswith("Aborted.\n")
     assert "Submitted" not in result.stdout
-    assert not respx_mock.calls
+    assert not guard.called
 
 
 def test_confirm_accepted(respx_mock, api_key, tmp_path):
@@ -158,13 +164,13 @@ def test_confirm_below_threshold(respx_mock, api_key, tmp_path):
     assert "Continue?" not in result.stderr
 
 
-def test_stdin_requires_yes(respx_mock, api_key):
+def test_stdin_requires_yes(respx_mock, guard, api_key):
     result = runner.invoke(app, ["batch", "submit", "-"], input="\n".join(many(100)))
     assert result.exit_code == 1
     assert result.stderr.endswith(
         "Error: Pass --yes to confirm spending 100 credits when reading from stdin.\n"
     )
-    assert not respx_mock.calls
+    assert not guard.called
 
 
 def test_stdin_with_yes(respx_mock, api_key):
@@ -178,13 +184,13 @@ def test_stdin_with_yes(respx_mock, api_key):
 
 
 @pytest.mark.parametrize("lines", [[], ["", "   "]])
-def test_empty_file(respx_mock, api_key, tmp_path, lines):
+def test_empty_file(respx_mock, guard, api_key, tmp_path, lines):
     path = tmp_path / "empty.txt"
     path.write_text("\n".join(lines))
     result = runner.invoke(app, ["batch", "submit", str(path)])
     assert result.exit_code == 1
     assert result.stderr == f"Error: No email addresses in {path}.\n"
-    assert not respx_mock.calls
+    assert not guard.called
 
 
 def test_empty_stdin(respx_mock, api_key):
@@ -193,20 +199,20 @@ def test_empty_stdin(respx_mock, api_key):
     assert result.stderr == "Error: No email addresses in stdin.\n"
 
 
-def test_too_many_addresses(respx_mock, api_key, tmp_path):
+def test_too_many_addresses(respx_mock, guard, api_key, tmp_path):
     path = write_emails(tmp_path, many(10_001))
     result = runner.invoke(app, ["batch", "submit", path, "--yes"])
     assert result.exit_code == 1
     assert result.stderr == "Error: emails must hold 1 to 10,000 addresses (got 10,001)\n"
-    assert not respx_mock.calls
+    assert not guard.called
 
 
-def test_missing_file(respx_mock, api_key, tmp_path):
+def test_missing_file(respx_mock, guard, api_key, tmp_path):
     path = tmp_path / "nope.txt"
     result = runner.invoke(app, ["batch", "submit", str(path)])
     assert result.exit_code == 1
     assert result.stderr == f"Error: File not found: {path}\n"
-    assert not respx_mock.calls
+    assert not guard.called
 
 
 # submit --wait
@@ -330,10 +336,10 @@ def test_status_not_found(respx_mock, api_key):
     assert result.stderr == "Error: Bulk verification not found\n"
 
 
-def test_status_rejects_non_numeric_id(respx_mock, api_key):
+def test_status_rejects_non_numeric_id(respx_mock, guard, api_key):
     result = runner.invoke(app, ["batch", "status", "abc"])
     assert result.exit_code == 2
-    assert not respx_mock.calls
+    assert not guard.called
 
 
 # results
@@ -377,10 +383,10 @@ def test_results_ignores_global_json(respx_mock, api_key):
 
 
 @pytest.mark.parametrize("option", ["--filter", "--format"])
-def test_results_bad_choice(respx_mock, api_key, option):
+def test_results_bad_choice(respx_mock, guard, api_key, option):
     result = runner.invoke(app, ["batch", "results", "1457", option, "bogus"])
     assert result.exit_code == 2
-    assert not respx_mock.calls
+    assert not guard.called
 
 
 def test_results_not_found(respx_mock, api_key):
@@ -388,3 +394,73 @@ def test_results_not_found(respx_mock, api_key):
     result = runner.invoke(app, ["batch", "results", "999999999"])
     assert result.exit_code == 1
     assert result.stderr == "Error: Bulk verification not found\n"
+
+
+# review fixes
+
+
+def test_confirm_prompt_keeps_stdout_clean(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, many(100))], input="y\n")
+    assert result.exit_code == 0
+    assert result.stdout == "Submitted batch 1457 (3 emails)\n"
+
+
+def test_confirm_eof_declines(respx_mock, guard, api_key, tmp_path):
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, many(100))], input="")
+    assert result.exit_code == 1
+    assert result.stderr.endswith("Aborted.\n")
+    assert not guard.called
+
+
+@pytest.mark.parametrize(
+    "data", ["josé@example.com\n".encode("latin-1"), "a@b.co".encode("utf-16")]
+)
+def test_non_utf8_file_fails_cleanly(respx_mock, guard, api_key, tmp_path, data):
+    path = tmp_path / "emails.txt"
+    path.write_bytes(data)
+    result = runner.invoke(app, ["batch", "submit", str(path)])
+    assert result.exit_code == 1
+    assert "isn't UTF-8 text" in result.stderr
+    assert "Traceback" not in result.stderr + result.stdout
+    assert not guard.called
+
+
+def test_stdin_bom_is_stripped(respx_mock, api_key):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    stdin = ("\ufeff" + "\n".join(EMAILS) + "\n").encode("utf-8")
+    result = runner.invoke(app, ["batch", "submit", "-"], input=stdin)
+    assert result.exit_code == 0
+    assert sent_json(route)["emails"] == EMAILS
+
+
+@pytest.mark.parametrize("extra", [["--format", "csv"], ["--filter", "risky"], ["--timeout", "60"]])
+def test_wait_only_options_require_wait(respx_mock, guard, api_key, tmp_path, extra):
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, EMAILS), *extra])
+    assert result.exit_code == 2
+    assert "only apply with --wait" in result.stderr
+    assert not guard.called
+
+
+def test_wait_api_error_points_to_status(respx_mock, api_key, tmp_path, clock):
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    serve(respx_mock, "error_502", STATUS)
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, EMAILS), "--wait"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.splitlines()[-1] == (
+        "Error: The deliverability engine is currently unavailable. "
+        "Batch 1457 may still be running. Check it with: mailtester batch status 1457"
+    )
+
+
+def test_wait_results_error_points_to_results(respx_mock, api_key, tmp_path, clock):
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    serve(respx_mock, "batch_status_completed", STATUS)
+    serve(respx_mock, "error_500", RESULTS)
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, EMAILS), "--wait"])
+    assert result.exit_code == 1
+    assert result.stderr.splitlines()[-1] == (
+        "Error: Verification failed: SMTP connection error. "
+        "Batch 1457 is complete. Fetch it with: mailtester batch results 1457"
+    )
