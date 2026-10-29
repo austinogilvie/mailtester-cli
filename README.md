@@ -232,6 +232,13 @@ match.status         # "valid"
 match.confidence     # 95
 match.candidates     # list[FinderCandidate], one per pattern tried
 
+roles = mt.find_domain("acme.com")       # RoleFinderResult, 3 credits found or not
+roles.emails                             # list[FinderCandidate]: info@, support@, sales@, ...
+roles.total                              # 5; at most roles.limit (10) come back per call
+
+company = mt.find_company("Acme Inc")    # resolves the name first; same shape plus .company
+company.domain                           # "acme.com"
+
 for job in mt.lists():                   # the first page, 25 lists
     print(job.id, job.name, job.status)
 
@@ -276,7 +283,7 @@ except MailTesterError as e:
 | Module | Contents |
 |---|---|
 | `mailtester_cli.client` | `MailTester`, the API client. Also importable from `mailtester_cli`. |
-| `mailtester_cli.models` | `VerifyResult`, `FinderResult`, `BatchJob`, `ListJob`, `ListPage`, `Credits`, and other response types |
+| `mailtester_cli.models` | `VerifyResult`, `FinderResult`, `RoleFinderResult`, `BatchJob`, `ListJob`, `ListPage`, `Credits`, and other response types |
 | `mailtester_cli.errors` | `MailTesterError` and its subclasses |
 | `mailtester_cli.cli` | The `mailtester` Typer app |
 

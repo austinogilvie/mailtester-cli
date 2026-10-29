@@ -6,10 +6,12 @@ from conftest import load_fixture
 
 from mailtester_cli.models import (
     Credits,
+    FinderCandidate,
     FinderResult,
     ListCounts,
     ListJob,
     ListPage,
+    RoleFinderResult,
     VerifyResult,
     _parse_datetime,
 )
@@ -86,6 +88,52 @@ def test_finder_result_not_found_shape(candidates):
     assert result.candidates == []
 
 
+# RoleFinderResult
+
+
+def test_role_finder_result_domain_shape():
+    result = RoleFinderResult.from_dict(data("finder_domain"))
+    assert result.company is None
+    assert result.offset == 0
+    assert result.domain == "example.com"
+    assert len(result.emails) == 5
+    assert all(isinstance(c, FinderCandidate) for c in result.emails)
+
+
+def test_role_finder_result_company_shape():
+    result = RoleFinderResult.from_dict(data("finder_company"))
+    assert result.company == "Acme"
+    assert result.offset is None
+    assert result.domain == "example.com"
+    # 023 U6: the company finder is "resolve, then the domain finder".
+    assert [c.email for c in result.emails] == [
+        c.email for c in RoleFinderResult.from_dict(data("finder_domain")).emails
+    ]
+
+
+def test_role_finder_result_empty():
+    result = RoleFinderResult.from_dict(data("finder_company_missing"))
+    assert result.emails == []
+    assert result.total == 0
+    assert result.credits_used == 3
+    assert result.domain == "example.org"
+
+
+@pytest.mark.parametrize("key", ["domain", "emails", "total", "limit", "credits_used"])
+def test_role_finder_result_missing_required_key(key):
+    payload = dict(data("finder_domain"))
+    del payload[key]
+    with pytest.raises(KeyError):
+        RoleFinderResult.from_dict(payload)
+
+
+def test_role_finder_result_nested_candidates_keep_raw():
+    result = RoleFinderResult.from_dict(data("finder_domain_catch_all"))
+    assert result.emails[0].raw == data("finder_domain_catch_all")["emails"][0]
+    assert "raw=" not in repr(result.emails[0])
+    assert "raw=" not in repr(result)
+
+
 # Credits
 
 
@@ -157,6 +205,8 @@ def test_list_page_is_frozen_and_hides_raw():
 MODELS = [
     (VerifyResult, lambda: data("verify_single")),
     (FinderResult, lambda: data("finder_email")),
+    (RoleFinderResult, lambda: data("finder_domain")),
+    (RoleFinderResult, lambda: data("finder_company")),
     (Credits, lambda: data("credits_after")),
     (ListJob, lambda: data("lists_after_batch")[0]),
 ]

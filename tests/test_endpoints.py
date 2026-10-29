@@ -2,7 +2,13 @@ import pytest
 from conftest import load_fixture, load_request, sent_json, serve
 
 from mailtester_cli.client import BASE_URL
-from mailtester_cli.errors import ConflictError, MailTesterError, NotFoundError
+from mailtester_cli.errors import (
+    ConflictError,
+    InsufficientCreditsError,
+    MailTesterError,
+    NotFoundError,
+    ValidationError,
+)
 from mailtester_cli.models import (
     Credits,
     FinderCandidate,
@@ -10,10 +16,13 @@ from mailtester_cli.models import (
     ListCounts,
     ListJob,
     ListPage,
+    RoleFinderResult,
 )
 
 VERIFY = f"{BASE_URL}/verify"
 FINDER = f"{BASE_URL}/finder/email"
+FINDER_DOMAIN = f"{BASE_URL}/finder/domain"
+FINDER_COMPANY = f"{BASE_URL}/finder/company"
 LISTS = f"{BASE_URL}/lists"
 CREDITS = f"{BASE_URL}/credits"
 
@@ -90,6 +99,139 @@ def test_find_email_404_raises_not_found(respx_mock, mt):
         mt.find_email("Jane", "Doe", "example.com")
     assert str(info.value) == "Bulk verification not found"
     assert info.value.status_code == 404
+
+
+# find_domain / find_company
+
+
+def test_find_domain_request_matches_fixture(respx_mock, mt):
+    route = serve(respx_mock, "finder_domain", FINDER_DOMAIN, method="POST")
+    mt.find_domain("example.com")
+    assert sent_json(route) == load_request("finder_domain")["json"]
+    assert sent_json(route) == {"domain": "example.com"}
+    assert route.calls.last.request.method == "POST"
+
+
+def test_find_domain_parses_result(respx_mock, mt):
+    serve(respx_mock, "finder_domain", FINDER_DOMAIN, method="POST")
+    result = mt.find_domain("example.com")
+    assert isinstance(result, RoleFinderResult)
+    assert result.domain == "example.com"
+    assert result.company is None
+    assert (result.total, result.limit, result.offset, result.credits_used) == (5, 10, 0, 3)
+    assert len(result.emails) == 5
+    assert all(isinstance(c, FinderCandidate) for c in result.emails)
+    assert [c.email for c in result.emails] == [e["email"] for e in result.raw["emails"]]
+    assert result.raw == load_fixture("finder_domain")[2]["data"]
+    first = result.emails[0]
+    assert first.email == "info@example.com"
+    assert first.status == "risky"
+    assert first.confidence == 55
+    assert first.is_role is True
+    assert first.is_catch_all is False
+    assert first.reason == "ROLE_ACCOUNT"
+
+
+def test_find_domain_catch_all_page(respx_mock, mt):
+    serve(respx_mock, "finder_domain_catch_all", FINDER_DOMAIN, method="POST")
+    result = mt.find_domain("example.net")
+    assert len(result.emails) == 10
+    assert result.total == 20
+    assert result.limit == 10
+    assert result.total > len(result.emails)
+    assert all(c.is_catch_all for c in result.emails)
+    verdicts = {(c.status, c.confidence, c.reason) for c in result.emails}
+    assert verdicts == {("risky", 40, "CATCH_ALL")}
+    assert [c.email for c in result.emails][:2] == ["info@example.net", "contact@example.net"]
+
+
+def test_find_domain_no_mx_raises_validation_error(respx_mock, mt):
+    serve(respx_mock, "finder_domain_no_mx", FINDER_DOMAIN, method="POST")
+    with pytest.raises(ValidationError) as info:
+        mt.find_domain("nonexistent-domain-x7q2.invalid")
+    assert str(info.value) == load_fixture("finder_domain_no_mx")[2]["error"]
+    assert info.value.errors == {}
+    assert info.value.status_code == 422
+
+
+def test_find_domain_empty_422_names_the_field(respx_mock, mt):
+    serve(respx_mock, "finder_domain_422", FINDER_DOMAIN, method="POST")
+    with pytest.raises(ValidationError) as info:
+        mt.find_domain("")
+    errors = load_fixture("finder_domain_422")[2]["errors"]
+    assert info.value.errors == errors
+    assert str(info.value) == f"domain: {errors['domain'][0]}"
+
+
+def test_find_domain_malformed_raises_mailtester_error(respx_mock, mt):
+    respx_mock.post(FINDER_DOMAIN).respond(
+        200, json={"success": True, "data": {"domain": "example.com", "emails": []}}
+    )
+    with pytest.raises(MailTesterError) as info:
+        mt.find_domain("example.com")
+    assert type(info.value) is MailTesterError
+    assert str(info.value) == "Unexpected response from MailTester: missing 'total'"
+
+
+def test_find_company_request_matches_fixture(respx_mock, mt):
+    route = serve(respx_mock, "finder_company", FINDER_COMPANY, method="POST")
+    mt.find_company("Acme")
+    assert sent_json(route) == load_request("finder_company")["json"]
+    assert sent_json(route) == {"company": "Acme"}
+
+
+def test_find_company_parses_result(respx_mock, mt):
+    serve(respx_mock, "finder_company", FINDER_COMPANY, method="POST")
+    result = mt.find_company("Acme")
+    assert isinstance(result, RoleFinderResult)
+    assert result.company == "Acme"
+    assert result.domain == "example.com"
+    assert result.offset is None
+    assert (result.total, result.limit, result.credits_used) == (5, 10, 3)
+    assert [c.email for c in result.emails] == [
+        "info@example.com",
+        "contact@example.com",
+        "support@example.com",
+        "sales@example.com",
+        "team@example.com",
+    ]
+    assert result.raw == load_fixture("finder_company")[2]["data"]
+
+
+def test_find_company_missing_is_an_empty_result(respx_mock, mt):
+    serve(respx_mock, "finder_company_missing", FINDER_COMPANY, method="POST")
+    result = mt.find_company("Nowhere")
+    assert result.emails == []
+    assert result.total == 0
+    assert result.domain == "example.org"
+    assert result.company == "Nowhere"
+    # The docs' "zero charge when nothing resolves" is wrong (023 U5).
+    assert result.credits_used == 3
+
+
+def test_find_company_empty_422_names_the_field(respx_mock, mt):
+    serve(respx_mock, "finder_company_422", FINDER_COMPANY, method="POST")
+    with pytest.raises(ValidationError) as info:
+        mt.find_company("")
+    errors = load_fixture("finder_company_422")[2]["errors"]
+    assert info.value.errors == errors
+    assert str(info.value) == f"company: {errors['company'][0]}"
+
+
+@pytest.mark.parametrize(
+    "call, url",
+    [
+        (lambda mt: mt.find_domain("example.com"), FINDER_DOMAIN),
+        (lambda mt: mt.find_company("Acme"), FINDER_COMPANY),
+    ],
+)
+def test_role_finders_map_api_errors(respx_mock, mt, call, url):
+    serve(respx_mock, "error_402", url, method="POST")
+    with pytest.raises(InsufficientCreditsError) as info:
+        call(mt)
+    assert str(info.value) == load_fixture("error_402")[2]["error"]
+    assert info.value.available_credits == 0
+    assert info.value.status_code == 402
 
 
 # lists

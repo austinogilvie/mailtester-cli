@@ -31,6 +31,7 @@ from mailtester_cli.models import (
     FinderResult,
     ListJob,
     ListPage,
+    RoleFinderResult,
     VerifyResult,
 )
 
@@ -263,6 +264,16 @@ class MailTester:
         """Find a person's address at a domain. 3 credits."""
         body = {"first_name": first_name, "last_name": last_name, "domain": domain}
         return _parse(FinderResult.from_dict, self._data("POST", "/finder/email", json=body))
+
+    def find_domain(self, domain: str) -> RoleFinderResult:
+        """Find role mailboxes (info@, sales@, ...) at a domain. 3 credits, found or not."""
+        data = self._data("POST", "/finder/domain", json={"domain": domain})
+        return _parse(RoleFinderResult.from_dict, data)
+
+    def find_company(self, company: str) -> RoleFinderResult:
+        """Resolve a company name to its domain and find the role mailboxes there. 3 credits."""
+        data = self._data("POST", "/finder/company", json={"company": company})
+        return _parse(RoleFinderResult.from_dict, data)
 
     def lists_page(self, *, page: int | None = None, per_page: int | None = None) -> ListPage:
         """Return one page of verification lists with its `meta` pagination block.

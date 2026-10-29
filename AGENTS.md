@@ -23,7 +23,7 @@ src/mailtester_cli/
     batch.py    # batch submit/upload/status/wait/results
   client.py     # MailTester: key loading, httpx, envelope, error mapping, rate limits
   errors.py     # MailTesterError hierarchy
-  models.py     # response types: VerifyResult, BatchJob, FinderResult, Credits, ListJob, ListPage, ...
+  models.py     # response types: VerifyResult, BatchJob, FinderResult, RoleFinderResult, Credits, ListJob, ListPage, ...
   __init__.py   # __version__ and the MailTester export
   __main__.py   # python -m support
 tests/          # pytest suite, never hits the live API
