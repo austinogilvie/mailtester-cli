@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -79,20 +80,10 @@ class BatchFailedError(MailTesterError):
 
 
 class BatchTimeoutError(MailTesterError):
-    """`wait_for_batch` ran out of time. `job` is the last BatchJob seen, or `None`.
+    """`wait_for_batch` ran out of time. `job` is the last BatchJob seen."""
 
-    `batch_id` only names the batch in the message when no poll succeeded.
-    """
-
-    def __init__(
-        self, job: BatchJob | None, timeout: float, *, batch_id: int | str | None = None
-    ) -> None:
-        if job is None:
-            label = f"Batch {batch_id}" if batch_id is not None else "Batch"
-            message = f"{label} not finished after {timeout:g}s"
-        else:
-            message = f'Batch {job.id} still "{job.status}" after {timeout:g}s'
-        super().__init__(message, body=job.raw if job is not None else None)
+    def __init__(self, job: BatchJob, timeout: float) -> None:
+        super().__init__(f'Batch {job.id} still "{job.status}" after {timeout:g}s', body=job.raw)
         self.job = job
         self.timeout = timeout
 
@@ -109,6 +100,20 @@ _BY_STATUS: dict[int, type[MailTesterError]] = {
 
 def _as_int(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _as_seconds(value: object) -> int | None:
+    """Read a retry delay given as an int, float, or numeric string; round up."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return None
+    if isinstance(value, int | float) and math.isfinite(value) and value >= 0:
+        return math.ceil(value)
+    return None
 
 
 def _field_errors(body: dict | None) -> dict[str, list[str]]:
@@ -150,5 +155,8 @@ def error_from_response(response: httpx.Response) -> MailTesterError:
     elif cls is ValidationError:
         kwargs["errors"] = errors
     elif cls is RateLimitError:
-        kwargs["retry_after"] = _as_int(body.get("retry_after")) if body else None
+        retry_after = _as_seconds(body.get("retry_after")) if body else None
+        if retry_after is None:
+            retry_after = _as_seconds(response.headers.get("retry-after"))
+        kwargs["retry_after"] = retry_after
     return cls(message, **kwargs)

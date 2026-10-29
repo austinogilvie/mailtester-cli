@@ -60,4 +60,4 @@ def mt():
 def _isolate_api_key(monkeypatch):
     """Keep the real key (environment or .env) out of every test."""
     monkeypatch.delenv("MAILTESTER_API_KEY", raising=False)
-    monkeypatch.setattr(mailtester_cli.client, "load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mailtester_cli.client, "dotenv_values", lambda *args, **kwargs: {})

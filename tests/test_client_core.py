@@ -1,6 +1,8 @@
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+import dotenv
 import httpx
 import pytest
 from conftest import serve
@@ -57,26 +59,70 @@ def test_key_from_env(respx_mock, monkeypatch):
     assert route.calls.last.request.headers["Authorization"] == "Bearer evp_env"
 
 
-def test_key_from_dotenv(respx_mock, monkeypatch):
+def test_key_from_dotenv_in_working_directory(respx_mock, monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("MAILTESTER_API_KEY=evp_dotenv\nOTHER_SETTING=x\n")
     calls = []
 
-    def fake_load_dotenv(*args, **kwargs):
-        calls.append(args)
-        monkeypatch.setenv("MAILTESTER_API_KEY", "evp_dotenv")
+    def fake_find_dotenv(**kwargs):
+        calls.append(kwargs)
+        return str(env_file)
 
-    monkeypatch.setattr(mailtester_cli.client, "load_dotenv", fake_load_dotenv)
+    monkeypatch.setattr(mailtester_cli.client, "find_dotenv", fake_find_dotenv)
+    monkeypatch.setattr(mailtester_cli.client, "dotenv_values", dotenv.dotenv_values)
     route = serve(respx_mock, "credits_before", CREDITS)
     MailTester()._data("GET", "/credits")
-    assert calls
+    assert calls == [{"usecwd": True}]
     assert route.calls.last.request.headers["Authorization"] == "Bearer evp_dotenv"
+    # Only our variable is read; the rest of .env stays out of the process environment.
+    assert "OTHER_SETTING" not in os.environ
+    assert "MAILTESTER_API_KEY" not in os.environ
 
 
-def test_dotenv_not_loaded_when_env_set(monkeypatch):
+def test_dotenv_not_read_when_env_set(monkeypatch):
     calls = []
-    monkeypatch.setattr(mailtester_cli.client, "load_dotenv", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(mailtester_cli.client, "dotenv_values", lambda *a, **k: calls.append(a))
     monkeypatch.setenv("MAILTESTER_API_KEY", "evp_env")
     MailTester()
     assert calls == []
+
+
+@pytest.mark.parametrize("key", ["evp_abc\ndef", "evp_abc def", "evp_abc\x00", "evp_abc\u00a0def"])
+def test_malformed_key_raises_without_echoing_it(key):
+    with pytest.raises(MissingAPIKeyError) as info:
+        MailTester(api_key=key)
+    assert "evp_abc" not in str(info.value)
+    assert "MAILTESTER_API_KEY" in str(info.value)
+
+
+def test_transport_error_message_masks_the_key(respx_mock):
+    respx_mock.get(CREDITS).mock(side_effect=httpx.LocalProtocolError("bad header Bearer evp_k"))
+    with pytest.raises(APIConnectionError) as info:
+        MailTester(api_key="evp_k")._data("GET", "/credits")
+    assert "evp_k" not in str(info.value)
+    assert "***" in str(info.value)
+
+
+def test_unparseable_reset_header_is_ignored():
+    headers = httpx.Headers({"x-ratelimit-limit": "60", "x-ratelimit-reset": "1793234520000"})
+    assert RateLimit.from_headers(headers) == RateLimit(60, None, None)
+
+
+@pytest.mark.parametrize(
+    ("body", "headers", "expected"),
+    [
+        ({"retry_after": 30.0}, {}, 30),
+        ({"retry_after": "30"}, {}, 30),
+        ({"retry_after": 2.5}, {}, 3),
+        ({}, {"Retry-After": "45"}, 45),
+        ({"retry_after": True}, {}, None),
+    ],
+)
+def test_retry_after_accepts_numbers_strings_and_header(respx_mock, body, headers, expected):
+    respx_mock.get(CREDITS).respond(429, json={"success": False, **body}, headers=headers)
+    with pytest.raises(RateLimitError) as info:
+        MailTester(api_key="evp_test")._data("GET", "/credits")
+    assert info.value.retry_after == expected
 
 
 @pytest.mark.parametrize("api_key", [None, "", "   "])
