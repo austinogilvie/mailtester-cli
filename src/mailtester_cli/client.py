@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
@@ -14,14 +16,20 @@ from dotenv import find_dotenv, load_dotenv
 from mailtester_cli import __version__
 from mailtester_cli.errors import (
     APIConnectionError,
+    BatchFailedError,
+    BatchTimeoutError,
     MailTesterError,
     MissingAPIKeyError,
+    RateLimitError,
     error_from_response,
 )
-from mailtester_cli.models import Credits, FinderResult, ListJob, VerifyResult
+from mailtester_cli.models import BatchJob, Credits, FinderResult, ListJob, VerifyResult
 
 BASE_URL = "https://app.mailtester.com/api/v1"
 ENV_VAR = "MAILTESTER_API_KEY"
+MAX_BATCH_EMAILS = 10_000
+# Assumed names: only "processing" and "completed" have been observed.
+FAILURE_STATUSES = frozenset({"failed", "cancelled", "canceled", "error"})
 
 
 @dataclass(frozen=True)
@@ -68,6 +76,10 @@ def _resolve_key(api_key: str | None) -> str:
 
 class MailTester:
     """Client for the MailTester REST API."""
+
+    # wait_for_batch uses only these, so tests can swap in a fake clock.
+    _sleep = staticmethod(time.sleep)
+    _clock = staticmethod(time.monotonic)
 
     def __init__(
         self,
@@ -161,3 +173,81 @@ class MailTester:
     def credits(self) -> Credits:
         """Return the account's credit balance."""
         return Credits.from_dict(self._data("GET", "/credits"))
+
+    def submit_batch(
+        self,
+        emails: Sequence[str],
+        *,
+        name: str | None = None,
+        callback_url: str | None = None,
+        auto_start: bool | None = None,
+    ) -> BatchJob:
+        """Submit addresses for bulk verification. 1 credit per address."""
+        if isinstance(emails, str):
+            raise TypeError("emails must be a sequence of addresses, not a str")
+        if not 1 <= len(emails) <= MAX_BATCH_EMAILS:
+            raise ValueError(
+                f"emails must hold 1 to {MAX_BATCH_EMAILS:,} addresses (got {len(emails):,})"
+            )
+        body: dict[str, Any] = {"emails": list(emails)}
+        if name is not None:
+            body["name"] = name
+        if callback_url is not None:
+            body["callback_url"] = callback_url
+        if auto_start is not None:
+            body["auto_start"] = auto_start
+        return BatchJob.from_dict(self._data("POST", "/verify/batch", json=body))
+
+    def batch_status(self, batch_id: int | str) -> BatchJob:
+        """Return a batch's current status and counts."""
+        return BatchJob.from_dict(self._data("GET", f"/verify/batch/{batch_id}"))
+
+    def wait_for_batch(
+        self,
+        batch_id: int | str,
+        *,
+        timeout: float = 600,
+        interval: float = 3.0,
+        max_interval: float = 10.0,
+        on_poll: Callable[[BatchJob], None] | None = None,
+    ) -> BatchJob:
+        """Poll until the batch is completed, backing off from `interval` to `max_interval`.
+
+        Raises BatchFailedError on a failure status and BatchTimeoutError after `timeout`
+        seconds. A 429 waits for `retry_after` (or `max_interval`); other errors propagate.
+        """
+        deadline = self._clock() + timeout
+        delay = interval
+        last: BatchJob | None = None
+        while True:
+            try:
+                job = self.batch_status(batch_id)
+            except RateLimitError as exc:
+                wait = exc.retry_after if exc.retry_after and exc.retry_after > 0 else max_interval
+                if self._clock() + wait > deadline:
+                    raise BatchTimeoutError(last, timeout, batch_id=batch_id) from exc
+                self._sleep(wait)
+                continue
+            last = job
+            if on_poll is not None:
+                on_poll(job)
+            if job.status == "completed":
+                return job
+            if job.status in FAILURE_STATUSES:
+                raise BatchFailedError(job)
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                raise BatchTimeoutError(job, timeout, batch_id=batch_id)
+            self._sleep(min(delay, remaining))
+            delay = min(delay * 1.5, max_interval)
+
+    def batch_results(self, batch_id: int | str, *, filter: str = "all") -> list[VerifyResult]:
+        """Return a batch's result rows. `filter` is all, valid, invalid, risky, or unknown."""
+        params = {"format": "json", "filter": filter}
+        data = self._data("GET", f"/verify/batch/{batch_id}/results", params=params)
+        return [VerifyResult.from_dict(row) for row in data]
+
+    def batch_results_csv(self, batch_id: int | str, *, filter: str = "all") -> str:
+        """Return a batch's results as CSV text with columns email,result,reason."""
+        params = {"format": "csv", "filter": filter}
+        return self._request("GET", f"/verify/batch/{batch_id}/results", params=params).text

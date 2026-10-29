@@ -1,9 +1,6 @@
-import json
-
 import pytest
-from conftest import load_request, serve
+from conftest import load_request, sent_json, serve
 
-from mailtester_cli import MailTester
 from mailtester_cli.client import BASE_URL
 from mailtester_cli.errors import NotFoundError
 from mailtester_cli.models import Credits, FinderCandidate, FinderResult, ListCounts, ListJob
@@ -12,16 +9,6 @@ VERIFY = f"{BASE_URL}/verify"
 FINDER = f"{BASE_URL}/finder/email"
 LISTS = f"{BASE_URL}/lists"
 CREDITS = f"{BASE_URL}/credits"
-
-
-@pytest.fixture
-def mt():
-    with MailTester(api_key="evp_test") as client:
-        yield client
-
-
-def sent_json(route):
-    return json.loads(route.calls.last.request.content)
 
 
 # verify

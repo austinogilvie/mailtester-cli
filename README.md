@@ -158,6 +158,7 @@ job.progress         # 64
 job = mt.wait_for_batch(job.id)          # polls until completed
 results = mt.batch_results(job.id)       # list[VerifyResult]
 risky = mt.batch_results(job.id, filter="risky")
+csv_text = mt.batch_results_csv(job.id)  # str with columns email,result,reason
 
 valid = [r.email for r in results if r.is_valid]
 ```

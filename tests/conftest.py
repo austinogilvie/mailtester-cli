@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 import mailtester_cli.client
+from mailtester_cli import MailTester
 
 FIXTURES = Path(__file__).parent / "fixtures" / "api"
 
@@ -29,16 +30,30 @@ def load_request(name: str) -> dict:
     return _record(name)["request"]
 
 
-def serve(respx_mock, name: str, url: str, method: str = "GET"):
-    """Route method+url on respx_mock to the recorded response in <name>.json."""
+def serve(respx_mock, name: str, url: str, method: str = "GET", **patterns):
+    """Route method+url on respx_mock to the recorded response in <name>.json.
+
+    Extra respx patterns pass through, e.g. params__eq={...} to match the exact query.
+    """
     status, headers, body = load_fixture(name)
     kwargs = {"text": body} if isinstance(body, str) else {"json": body}
-    return respx_mock.request(method, url).respond(status, headers=headers, **kwargs)
+    return respx_mock.request(method, url, **patterns).respond(status, headers=headers, **kwargs)
+
+
+def sent_json(route) -> dict:
+    """Return the JSON body of the last request a respx route received."""
+    return json.loads(route.calls.last.request.content)
 
 
 @pytest.fixture
 def api_fixture():
     return load_fixture
+
+
+@pytest.fixture
+def mt():
+    with MailTester(api_key="evp_test") as client:
+        yield client
 
 
 @pytest.fixture(autouse=True)

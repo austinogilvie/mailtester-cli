@@ -214,3 +214,48 @@ class ListJob:
             completed_at=_parse_datetime(data.get("completed_at")),
             raw=data,
         )
+
+
+@dataclass(frozen=True)
+class BatchJob:
+    """A bulk verification job, from `POST /verify/batch` or `GET /verify/batch/{id}`.
+
+    The submit response has only `id`, `status`, `total_emails`, and `created_at`, so every
+    other field is `None` there. There's no risky count because the API doesn't return one.
+    """
+
+    id: int
+    status: str
+    total_emails: int
+    created_at: datetime
+    progress: int | None = None
+    processed_emails: int | None = None
+    valid_emails: int | None = None
+    invalid_emails: int | None = None
+    unknown_emails: int | None = None
+    completed_at: datetime | None = None
+    retrieving_results: bool | None = None
+    notice: str | None = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @property
+    def is_complete(self) -> bool:
+        return self.status == "completed"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> BatchJob:
+        return cls(
+            id=data["id"],
+            status=data["status"],
+            total_emails=data["total_emails"],
+            created_at=_parse_datetime(data["created_at"]),
+            progress=data.get("progress"),
+            processed_emails=data.get("processed_emails"),
+            valid_emails=data.get("valid_emails"),
+            invalid_emails=data.get("invalid_emails"),
+            unknown_emails=data.get("unknown_emails"),
+            completed_at=_parse_datetime(data.get("completed_at")),
+            retrieving_results=data.get("retrieving_results"),
+            notice=data.get("notice"),
+            raw=data,
+        )

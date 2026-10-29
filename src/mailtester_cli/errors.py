@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from mailtester_cli.models import BatchJob
 
 
 class MailTesterError(Exception):
@@ -65,6 +68,33 @@ class ServerError(MailTesterError):
 
 class APIConnectionError(MailTesterError):
     """The request never got a response (connection failure or timeout)."""
+
+
+class BatchFailedError(MailTesterError):
+    """`wait_for_batch` saw a failure status. `job` is the BatchJob from that poll."""
+
+    def __init__(self, job: BatchJob) -> None:
+        super().__init__(f'Batch {job.id} ended with status "{job.status}"', body=job.raw)
+        self.job = job
+
+
+class BatchTimeoutError(MailTesterError):
+    """`wait_for_batch` ran out of time. `job` is the last BatchJob seen, or `None`.
+
+    `batch_id` only names the batch in the message when no poll succeeded.
+    """
+
+    def __init__(
+        self, job: BatchJob | None, timeout: float, *, batch_id: int | str | None = None
+    ) -> None:
+        if job is None:
+            label = f"Batch {batch_id}" if batch_id is not None else "Batch"
+            message = f"{label} not finished after {timeout:g}s"
+        else:
+            message = f'Batch {job.id} still "{job.status}" after {timeout:g}s'
+        super().__init__(message, body=job.raw if job is not None else None)
+        self.job = job
+        self.timeout = timeout
 
 
 _BY_STATUS: dict[int, type[MailTesterError]] = {
