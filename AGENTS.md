@@ -16,11 +16,11 @@ src/mailtester_cli/
   cli.py        # Typer app and command definitions
   client.py     # MailTester: key loading, httpx, envelope, error mapping, rate limits
   errors.py     # MailTesterError hierarchy
-  models.py     # response types: VerifyResult, FinderResult, Credits, ListJob, ...
+  models.py     # response types: VerifyResult, BatchJob, FinderResult, Credits, ListJob, ...
   __init__.py   # __version__ and the MailTester export
   __main__.py   # python -m support
 tests/          # pytest suite, never hits the live API
-  conftest.py   # load_fixture / load_request / serve for respx routes
+  conftest.py   # load_fixture / load_request / serve / sent_json helpers and the mt fixture
   fixtures/api/ # redacted live responses, plus synthetic 402/429/500/502
 scripts/
   discover.py   # recaptures the fixtures (paid calls need --spend)
