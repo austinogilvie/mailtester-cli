@@ -5,7 +5,7 @@ from pathlib import Path
 import dotenv
 import httpx
 import pytest
-from conftest import serve
+from conftest import load_fixture, serve
 
 import mailtester_cli.client
 from mailtester_cli import MailTester, __version__
@@ -206,6 +206,45 @@ def test_2xx_non_json_raises(respx_mock):
     e = raised_inline(respx_mock, 200, text="not json")
     assert type(e) is MailTesterError
     assert e.body is None
+
+
+# _body
+
+
+def test_body_returns_whole_json_object(respx_mock, mt):
+    serve(respx_mock, "list_delete", f"{BASE_URL}/lists/1492", method="DELETE")
+    body = mt._body("DELETE", "/lists/1492")
+    assert body == {"success": True, "message": "List deleted"}
+    assert body == load_fixture("list_delete")[2]
+
+
+def test_body_non_json_raises(respx_mock, mt):
+    respx_mock.delete(f"{BASE_URL}/lists/1492").respond(200, text="not json")
+    with pytest.raises(MailTesterError) as info:
+        mt._body("DELETE", "/lists/1492")
+    e = info.value
+    assert type(e) is MailTesterError
+    assert str(e) == "Unexpected response from MailTester"
+    assert e.status_code == 200
+    assert e.body is None
+
+
+def test_body_json_array_raises(respx_mock, mt):
+    respx_mock.delete(f"{BASE_URL}/lists/1492").respond(200, json=[1, 2])
+    with pytest.raises(MailTesterError) as info:
+        mt._body("DELETE", "/lists/1492")
+    e = info.value
+    assert type(e) is MailTesterError
+    assert e.body is None
+    assert e.status_code == 200
+
+
+def test_body_maps_errors_like_data(respx_mock, mt):
+    serve(respx_mock, "error_404_list", f"{BASE_URL}/lists/999999999", method="DELETE")
+    with pytest.raises(NotFoundError) as info:
+        mt._body("DELETE", "/lists/999999999")
+    assert str(info.value) == load_fixture("error_404_list")[2]["error"]
+    assert info.value.status_code == 404
 
 
 # Error mapping

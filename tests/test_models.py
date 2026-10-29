@@ -9,6 +9,7 @@ from mailtester_cli.models import (
     FinderResult,
     ListCounts,
     ListJob,
+    ListPage,
     VerifyResult,
     _parse_datetime,
 )
@@ -16,6 +17,10 @@ from mailtester_cli.models import (
 
 def data(name):
     return load_fixture(name)[2]["data"]
+
+
+def body(name):
+    return load_fixture(name)[2]
 
 
 # VerifyResult
@@ -114,6 +119,37 @@ def test_list_counts_pass_through():
     job = ListJob.from_dict(data("lists_after_batch")[0])
     assert isinstance(job.results, ListCounts)
     assert job.results.raw == data("lists_after_batch")[0]["results"]
+
+
+# ListPage
+
+
+def test_list_page_from_body():
+    page = ListPage.from_body(body("lists_after_batch"))
+    assert (page.current_page, page.last_page, page.per_page, page.total) == (1, 1, 5, 1)
+    assert len(page.items) == 1
+    assert isinstance(page.items[0], ListJob)
+    assert page.items[0].id == 1457
+    assert page.raw == body("lists_after_batch")
+
+
+def test_list_page_empty():
+    page = ListPage.from_body(body("lists"))
+    assert page.items == []
+    assert page.total == 0
+    assert page.last_page == 1
+
+
+def test_list_page_missing_meta_raises_key_error():
+    with pytest.raises(KeyError):
+        ListPage.from_body({"success": True, "data": []})
+
+
+def test_list_page_is_frozen_and_hides_raw():
+    page = ListPage.from_body(body("lists_after_batch"))
+    with pytest.raises(FrozenInstanceError):
+        page.total = 5
+    assert "raw=" not in repr(page)
 
 
 # Base pattern

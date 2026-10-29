@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/lists/999999999",
+    "params": {},
+    "json": null
+  },
+  "status": 404,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": false,
+    "error": "List not found"
+  },
+  "synthetic": true
+}

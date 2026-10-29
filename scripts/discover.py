@@ -16,6 +16,10 @@ only for redaction and nothing is submitted.
 
     uv run python scripts/discover.py --upload leads.csv --no-start
 
+A --no-start batch is free, and recording it also captures GET /lists/{id} and DELETE /lists/{id}:
+
+    uv run python scripts/discover.py --batch noreply@example.com --no-start
+
 An XLSX file can't be counted locally, so a started upload of one is refused: use --no-start.
 
 Real addresses, names, and domains are replaced with placeholders before anything is
@@ -357,9 +361,9 @@ def run_upload(rec: Recorder, args: argparse.Namespace) -> None:
 
 
 def delete_list(rec: Recorder, step: str, list_id: int | str) -> None:
-    """Delete a pending batch so it doesn't linger. Not recorded: list_delete.json covers it."""
-    resp = rec.client.delete(f"/lists/{list_id}")
-    print(f"[{step:>3}] DELETE /lists/{list_id} -> {resp.status_code}  (not recorded)")
+    """Record GET /lists/{id} on the pending batch, then delete it so it doesn't linger."""
+    rec.call(step, "list_show_pending", "GET", f"/lists/{list_id}", scrub_names=True)
+    rec.call(step, "list_delete", "DELETE", f"/lists/{list_id}")
 
 
 def poll_batch(
@@ -410,11 +414,37 @@ def run_batch_reads(rec: Recorder, args: argparse.Namespace, batch_id: int | str
     rec.call("9", "lists_after_batch", "GET", "/lists", params=params, scrub_names=True)
 
 
+def _meta_total(resp: httpx.Response) -> int | None:
+    """`meta.total` from a paginated body, or None when it can't be read."""
+    try:
+        return int(resp.json()["meta"]["total"])
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def run_list_pages(rec: Recorder, lists_resp: httpx.Response) -> None:
+    """Step 2b: one list per page, so page 2 holds a row and the page after the last is empty.
+
+    Page 2 only has a row when the account holds at least two lists. Both fixtures depend on
+    step 2's `meta.total`, so when it's missing the step is skipped rather than guessed: a
+    guessed page could be a real one saved under the past-the-end name.
+    """
+    total = _meta_total(lists_resp)
+    if total is None:
+        print("[ 2b] skipped lists_past_last_page: step 2 had no meta.total")
+        return
+    params = {"per_page": 1, "page": 2}
+    rec.call("2b", "lists_page_2", "GET", "/lists", params=params, scrub_names=True)
+    params = {"per_page": 1, "page": max(total, 1) + 1}
+    rec.call("2b", "lists_past_last_page", "GET", "/lists", params=params, scrub_names=True)
+
+
 def run_errors(rec: Recorder) -> None:
     bad_key = httpx.Client(base_url=BASE_URL, headers={"Authorization": "Bearer evp_invalid"})
     with bad_key:
         rec.call("11", "error_401", "GET", "/credits", client=bad_key)
     rec.call("12", "error_404", "GET", "/verify/batch/999999999")
+    rec.call("12", "error_404_list", "GET", "/lists/999999999")
     rec.call("13", "error_422", "POST", "/verify/batch", json_body={"emails": []})
 
 
@@ -469,7 +499,7 @@ def upload_count(path: Path) -> int | None:
 def planned_cost(args: argparse.Namespace) -> int:
     cost = VERIFY_COST if args.verify_email else 0
     cost += FIND_COST * (bool(args.find) + bool(args.find_missing))
-    if args.batch and not args.batch_id:
+    if args.batch and not args.batch_id and not args.no_start:
         cost += len(args.batch)
     if args.upload and not args.no_start:
         # A binary file has no local count; main refuses to start one before anything is sent.
@@ -558,10 +588,12 @@ def main(argv: list[str] | None = None) -> int:
     with httpx.Client(base_url=BASE_URL, headers=headers, timeout=90) as client:
         rec = Recorder(client, build_redactor(args, key), args.out)
         rec.call("1", "credits_before", "GET", "/credits")
-        rec.call("2", "lists", "GET", "/lists", params={"per_page": 5}, scrub_names=True)
+        params = {"per_page": 5}
+        lists_resp = rec.call("2", "lists", "GET", "/lists", params=params, scrub_names=True)
+        run_list_pages(rec, lists_resp)
         batch_id = args.batch_id
         try:
-            if cost or args.upload:  # a --no-start upload is free but still a step 5u
+            if cost or args.upload or (args.batch and args.no_start):
                 batch_id = run_paid(rec, args) or batch_id
         except Stop as e:
             stopped = str(e)

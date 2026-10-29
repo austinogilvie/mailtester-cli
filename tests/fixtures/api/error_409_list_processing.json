@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "DELETE",
+    "path": "/lists/1457",
+    "params": {},
+    "json": null
+  },
+  "status": 409,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": false,
+    "error": "Cannot delete a list that is still processing"
+  },
+  "synthetic": true
+}

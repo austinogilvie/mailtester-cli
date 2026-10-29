@@ -50,7 +50,7 @@ $ mailtester --help
 │ verify    Verify a single email address. (1 credit)                │
 │ batch     Submit, track, and fetch bulk verification jobs.         │
 │ find      Find a person's email from name + domain. (3 credits)    │
-│ lists     List your bulk verification jobs.                        │
+│ lists     List, inspect, and delete your bulk verification jobs.   │
 │ credits   Show your credit balance.                                │
 ╰────────────────────────────────────────────────────────────────────╯
 ```
@@ -143,13 +143,36 @@ The finder tries several address patterns. Use `--json` to see every candidate.
 $ mailtester lists
 ID    NAME      STATUS     EMAILS  VALID  INVALID  RISKY  CREATED
 1287  Q3 leads  completed   1,000    820       90     60  2026-10-01
+Page 1 of 3 (57 lists). Use --page 2 or --all for more.
+
+$ mailtester lists --all --json | jq '.[] | select(.status == "pending") | .id'
+1492
+1493
+
+$ mailtester lists show 1287
+List 1287  Q3 leads  completed  100%  (1,000/1,000)
+  valid       820
+  invalid     90
+  risky       60
+  unknown     30
+  credits     1,000
+  created     2026-10-01 09:12:03 UTC
+  started     2026-10-01 09:12:04 UTC
+  completed   2026-10-01 09:40:51 UTC
+
+$ mailtester lists delete 1492 1493
+Delete 2 lists (1492, 1493)? [y/N]: y
+Deleted list 1492
+Deleted list 1493
 
 $ mailtester credits
 Balance    5,000 credits
 Account    pay_as_you_go
 ```
 
-Accounts with a monthly allowance get an extra line, for example `Monthly    1,000 (renews 2026-11-01)`.
+`lists` shows 25 lists per page. Use `--page` and `--per-page` to move around, or `--all` to fetch every page. The page hint goes to stderr, so `> file` captures only the table. Accounts with a monthly allowance get an extra `credits` line, for example `Monthly    1,000 (renews 2026-11-01)`.
+
+`lists delete` takes one or more ids and asks once before deleting unless you pass `--yes`. Deleting a list removes its results. Each deleted id prints `Deleted list <id>`; an id that isn't found or is still processing prints the API's error and the command carries on with the rest, exiting `1` at the end if any id failed. Any other error, such as a rate limit or a bad key, stops the command. The API refuses to delete a list that's still processing, and the error says so.
 
 ## Python
 
@@ -209,8 +232,18 @@ match.status         # "valid"
 match.confidence     # 95
 match.candidates     # list[FinderCandidate], one per pattern tried
 
-for job in mt.lists():
+for job in mt.lists():                   # the first page, 25 lists
     print(job.id, job.name, job.status)
+
+page = mt.lists_page(page=2)             # ListPage: .items plus .current_page, .last_page, .total
+for job in mt.iter_lists():              # every page, 100 lists per request
+    ...
+
+job = mt.get_list(1287)                  # one ListJob, with per-verdict counts and timestamps
+job.results.valid                        # 820
+job.completed_at                         # datetime, or None until the list completes
+
+mt.delete_list(1287)                     # "List deleted"; raises ConflictError while processing
 
 mt.credits().balance  # 5000
 ```
@@ -243,7 +276,7 @@ except MailTesterError as e:
 | Module | Contents |
 |---|---|
 | `mailtester_cli.client` | `MailTester`, the API client. Also importable from `mailtester_cli`. |
-| `mailtester_cli.models` | `VerifyResult`, `FinderResult`, `BatchJob`, `ListJob`, `Credits`, and other response types |
+| `mailtester_cli.models` | `VerifyResult`, `FinderResult`, `BatchJob`, `ListJob`, `ListPage`, `Credits`, and other response types |
 | `mailtester_cli.errors` | `MailTesterError` and its subclasses |
 | `mailtester_cli.cli` | The `mailtester` Typer app |
 

@@ -10,6 +10,7 @@ import typer
 from mailtester_cli.client import MAX_BATCH_EMAILS, MAX_UPLOAD_BYTES, MailTester
 from mailtester_cli.commands._shared import (
     client,
+    confirm,
     error_message,
     fail,
     fmt_int,
@@ -92,15 +93,6 @@ def _check_callback_url(value: str | None) -> None:
         fail("--callback-url must be an http(s) URL.", code=2)
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         fail("--callback-url must be an http(s) URL.", code=2)
-
-
-def _confirm(question: str) -> bool:
-    # typer.confirm prints the prompt's trailing space to stdout; keep stdout for results only.
-    typer.echo(f"{question} [y/N]: ", err=True, nl=False)
-    answer = sys.stdin.readline()
-    if not answer:
-        typer.echo(err=True)
-    return answer.strip().lower() in {"y", "yes"}
 
 
 def _with_hint(message: str, hint: str) -> str:
@@ -201,7 +193,7 @@ def submit(
     if count >= CONFIRM_THRESHOLD and not yes:
         if file == "-":
             fail(f"Pass --yes to confirm spending {cost} when reading from stdin.")
-        if not _confirm("Continue?"):
+        if not confirm("Continue?"):
             typer.echo("Aborted.", err=True)
             raise typer.Exit(1)
 
@@ -279,7 +271,7 @@ def upload(
         cost = f"{fmt_int(count)} credit{'' if count == 1 else 's'}"
         typer.echo(f"This will use up to {cost}.", err=True)
     needs_confirm = (count is None or count >= CONFIRM_THRESHOLD) and not yes
-    if needs_confirm and not _confirm("Continue?"):
+    if needs_confirm and not confirm("Continue?"):
         typer.echo("Aborted.", err=True)
         raise typer.Exit(1)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -35,6 +36,18 @@ def fail(message: str, code: int = 1) -> NoReturn:
     """Print `Error: <message>` to stderr and exit with `code`."""
     typer.echo(f"Error: {message}", err=True)
     raise typer.Exit(code)
+
+
+def confirm(question: str) -> bool:
+    """Ask `question` on stderr and read one line from stdin; EOF and anything but y/yes is no.
+
+    typer.confirm prints the prompt's trailing space to stdout; stdout is for results only.
+    """
+    typer.echo(f"{question} [y/N]: ", err=True, nl=False)
+    answer = sys.stdin.readline()
+    if not answer:
+        typer.echo(err=True)
+    return answer.strip().lower() in {"y", "yes"}
 
 
 def error_message(exc: MailTesterError) -> str:
