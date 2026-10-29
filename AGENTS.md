@@ -14,15 +14,18 @@
 ```
 src/mailtester_cli/
   cli.py        # Typer app and command definitions
-  __init__.py   # __version__ (read from package metadata)
+  client.py     # MailTester: key loading, httpx, envelope, error mapping, rate limits
+  errors.py     # MailTesterError hierarchy
+  __init__.py   # __version__ and the MailTester export
   __main__.py   # python -m support
 tests/          # pytest suite, never hits the live API
+  conftest.py   # load_fixture / api_fixture for respx routes
   fixtures/api/ # redacted live responses, plus synthetic 402/429/500/502
 scripts/
   discover.py   # recaptures the fixtures (paid calls need --spend)
 ```
 
-Planned modules are `client.py` (`MailTester`), `models.py` (response types), and `errors.py` (`MailTesterError` hierarchy).
+The planned module is `models.py` (response types).
 
 Planned work is tracked in `.specs/BOARD.md`, with one file per SPEC/FEAT/BUG in `.specs/`. The board explains the naming and status conventions.
 
