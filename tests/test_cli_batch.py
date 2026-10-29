@@ -3,11 +3,11 @@ import json
 
 import httpx
 import pytest
-from conftest import load_fixture, sent_json, serve
+from conftest import load_fixture, sent_form, sent_json, serve
 from typer.testing import CliRunner
 
 from mailtester_cli.cli import app
-from mailtester_cli.client import BASE_URL, MailTester
+from mailtester_cli.client import BASE_URL, MAX_UPLOAD_BYTES, MailTester
 
 SUBMIT = f"{BASE_URL}/verify/batch"
 STATUS = f"{BASE_URL}/verify/batch/1457"
@@ -738,5 +738,309 @@ def test_batch_help_order(respx_mock, guard, api_key):
         for line in result.stdout.splitlines()
         if line.startswith("│ ") and not line.startswith("│ --")
     ]
-    assert names == ["submit", "status", "wait", "results"]
+    assert names == ["submit", "upload", "status", "wait", "results"]
+    assert not guard.called
+
+
+# upload
+
+UPLOAD = f"{BASE_URL}/verify/batch/upload"
+XLSX_BYTES = b"PK\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00!\x00\xff\xfe\x9c\xe3"  # not valid UTF-8
+CSV_BYTES = b"name,email\nJane Doe,jane@example.com\nJohn Doe,john@example.net\n"
+XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def write_file(tmp_path, name: str, data: bytes) -> str:
+    path = tmp_path / name
+    path.write_bytes(data)
+    return str(path)
+
+
+def upload_job() -> dict:
+    return fixture_data("batch_upload")
+
+
+def submitted_line(job: dict) -> str:
+    return f"Submitted batch {job['id']} ({job['total_emails']:,} emails)"
+
+
+def unknown_count_line(path: str) -> str:
+    return (
+        f"The address count in {path} isn't known until MailTester reads it. "
+        "This will use 1 credit per address."
+    )
+
+
+def test_upload_csv_counts_lines_and_sends_file(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path])
+    assert result.exit_code == 0
+    assert result.stderr == "This will use up to 3 credits.\n"
+    assert result.stdout == submitted_line(upload_job()) + "\n"
+    assert sent_form(route) == ({}, {"file": ("leads.csv", CSV_BYTES, "text/csv")})
+
+
+def test_upload_txt_skips_blank_lines(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    data = b"a@example.com\n\nb@example.com\n  \nc@example.net\n"
+    path = write_file(tmp_path, "leads.txt", data)
+    result = runner.invoke(app, ["batch", "upload", path])
+    assert result.exit_code == 0
+    assert result.stderr == "This will use up to 3 credits.\n"
+    assert sent_form(route)[1]["file"] == ("leads.txt", data, "text/plain")
+
+
+def test_upload_bom_txt_is_text(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    data = "﻿a@example.com\nb@example.com\n".encode()
+    path = write_file(tmp_path, "leads.txt", data)
+    result = runner.invoke(app, ["batch", "upload", path])
+    assert result.exit_code == 0
+    assert result.stderr == "This will use up to 2 credits.\n"
+    assert sent_form(route)[1]["file"][1].startswith("﻿".encode())
+
+
+def test_upload_single_line_says_credit(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    path = write_file(tmp_path, "leads.txt", b"a@example.com\n")
+    result = runner.invoke(app, ["batch", "upload", path])
+    assert result.exit_code == 0
+    assert result.stderr == "This will use up to 1 credit.\n"
+
+
+def test_upload_xlsx_count_unknown_prompts(respx_mock, guard, api_key, tmp_path):
+    path = write_file(tmp_path, "leads.xlsx", XLSX_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path], input="n\n")
+    assert result.exit_code == 1
+    assert result.stderr.startswith(f"{unknown_count_line(path)}\nContinue? [y/N]:")
+    assert result.stderr.endswith("Aborted.\n")
+    assert not guard.called
+
+
+def test_upload_xlsx_confirm_accepted(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_upload_pending", UPLOAD, method="POST")
+    path = write_file(tmp_path, "leads.xlsx", XLSX_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path], input="y\n")
+    assert result.exit_code == 0
+    assert sent_form(route)[1]["file"] == ("leads.xlsx", XLSX_BYTES, XLSX_TYPE)
+
+
+def test_upload_xlsx_with_yes_skips_prompt(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_upload_xlsx_pending", UPLOAD, method="POST")
+    path = write_file(tmp_path, "leads.xlsx", XLSX_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path, "--yes"])
+    assert result.exit_code == 0
+    assert result.stderr == f"{unknown_count_line(path)}\n"
+    assert route.called
+
+
+def test_upload_confirm_declined_at_threshold(respx_mock, guard, api_key, tmp_path):
+    path = write_file(tmp_path, "leads.txt", "\n".join(many(100)).encode() + b"\n")
+    result = runner.invoke(app, ["batch", "upload", path], input="n\n")
+    assert result.exit_code == 1
+    assert result.stderr.startswith("This will use up to 100 credits.\nContinue? [y/N]:")
+    assert result.stderr.endswith("Aborted.\n")
+    assert not guard.called
+
+
+@pytest.mark.parametrize("flag", ["--yes", "-y"])
+def test_upload_confirm_skipped_with_yes(respx_mock, api_key, tmp_path, flag):
+    route = serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    path = write_file(tmp_path, "leads.txt", "\n".join(many(100)).encode() + b"\n")
+    result = runner.invoke(app, ["batch", "upload", path, flag])
+    assert result.exit_code == 0
+    assert result.stderr == "This will use up to 100 credits.\n"
+    assert route.called
+
+
+def test_upload_below_threshold_no_prompt(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    path = write_file(tmp_path, "leads.txt", "\n".join(many(99)).encode() + b"\n")
+    result = runner.invoke(app, ["batch", "upload", path])
+    assert result.exit_code == 0
+    assert "Continue?" not in result.stderr
+
+
+def test_upload_with_name_and_callback_url(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    args = ["batch", "upload", path, "--name", "Q3 leads", "--callback-url", HOOK]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0
+    assert sent_form(route)[0] == {"name": "Q3 leads", "callback_url": HOOK}
+
+
+def test_upload_rejects_bad_callback_url(respx_mock, guard, api_key, tmp_path):
+    path = tmp_path / "nope.csv"
+    result = runner.invoke(app, ["batch", "upload", str(path), "--callback-url", "nope"])
+    assert result.exit_code == 2
+    assert result.stderr == "Error: --callback-url must be an http(s) URL.\n"
+    assert result.stdout == ""
+    assert not guard.called
+
+
+def test_upload_bad_callback_url_beats_wait_guard(respx_mock, guard, api_key, tmp_path):
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    args = ["batch", "upload", path, "--callback-url", "nope", "--format", "csv"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 2
+    assert result.stderr == "Error: --callback-url must be an http(s) URL.\n"
+    assert not guard.called
+
+
+def test_upload_rejects_stdin_dash(respx_mock, guard, api_key):
+    result = runner.invoke(app, ["batch", "upload", "-"])
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "Error: batch upload needs a file path, not stdin. "
+        "Pipe addresses to: mailtester batch submit -\n"
+    )
+    assert not guard.called
+
+
+def test_upload_missing_file(respx_mock, guard, api_key, tmp_path):
+    path = tmp_path / "nope.csv"
+    result = runner.invoke(app, ["batch", "upload", str(path)])
+    assert result.exit_code == 1
+    assert result.stderr == f"Error: File not found: {path}\n"
+    assert not guard.called
+
+
+def test_upload_empty_file(respx_mock, guard, api_key, tmp_path):
+    path = write_file(tmp_path, "leads.csv", b"")
+    result = runner.invoke(app, ["batch", "upload", path])
+    assert result.exit_code == 1
+    assert result.stderr == f"Error: {path} is empty.\n"
+    assert not guard.called
+
+
+def test_upload_oversize_file(respx_mock, guard, api_key, tmp_path):
+    path = tmp_path / "leads.csv"
+    with open(path, "wb") as fh:
+        fh.seek(MAX_UPLOAD_BYTES)
+        fh.write(b"x")
+    result = runner.invoke(app, ["batch", "upload", str(path)])
+    assert result.exit_code == 1
+    assert result.stderr == f"Error: {path} is 10.5 MB; the upload limit is 10 MB.\n"
+    assert not guard.called
+
+
+def test_upload_unreadable_file(respx_mock, guard, api_key, tmp_path):
+    result = runner.invoke(app, ["batch", "upload", str(tmp_path)])
+    assert result.exit_code == 1
+    assert result.stderr.startswith(f"Error: Could not read {tmp_path}: ")
+    assert "Traceback" not in result.stderr + result.stdout
+    assert not guard.called
+
+
+def test_upload_json(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    result = runner.invoke(app, ["--json", "batch", "upload", path])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == upload_job()
+    assert result.stderr == "This will use up to 3 credits.\n"
+
+
+def test_upload_bad_type_shows_api_message(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "batch_upload_bad_type", UPLOAD, method="POST")
+    path = write_file(tmp_path, "leads.json", b'{"emails": []}')
+    result = runner.invoke(app, ["batch", "upload", path])
+    msg = load_fixture("batch_upload_bad_type")[2]["errors"]["file"][0]
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.endswith(f"Error: file: {msg}\n")
+
+
+def upload_wait_routes(respx_mock, *statuses: httpx.Response) -> str:
+    """Serve the upload, then the given status polls; return the batch's status URL."""
+    serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    status_url = f"{BASE_URL}/verify/batch/{upload_job()['id']}"
+    respx_mock.get(status_url).mock(side_effect=list(statuses))
+    return status_url
+
+
+def test_upload_wait_prints_json_results(respx_mock, api_key, tmp_path, clock):
+    job = upload_job()
+    status_url = upload_wait_routes(
+        respx_mock,
+        status_response("batch_status_processing", id=job["id"]),
+        status_response("batch_status_completed", id=job["id"]),
+    )
+    params = {"format": "json", "filter": "all"}
+    serve(respx_mock, "batch_results_json_all", f"{status_url}/results", params__eq=params)
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path, "--wait"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == json_rows()
+    assert result.stderr.splitlines() == [
+        "This will use up to 3 credits.",
+        submitted_line(job),
+        f"Batch {job['id']}  processing  0%  (0/3)",
+        f"Batch {job['id']}  completed  100%  (3/3)",
+    ]
+    assert clock.sleeps == [3.0]
+
+
+def test_upload_wait_csv(respx_mock, api_key, tmp_path, clock):
+    job = upload_job()
+    status_url = upload_wait_routes(
+        respx_mock, status_response("batch_status_completed", id=job["id"])
+    )
+    params = {"format": "csv", "filter": "all"}
+    serve(respx_mock, "batch_results_csv_all", f"{status_url}/results", params__eq=params)
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path, "--wait", "--format", "csv"])
+    assert result.exit_code == 0
+    assert result.stdout == csv_text()
+
+
+def test_upload_wait_timeout_says_resume(respx_mock, api_key, tmp_path, clock):
+    job = upload_job()
+    serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    respx_mock.get(f"{BASE_URL}/verify/batch/{job['id']}").mock(
+        return_value=status_response("batch_status_processing", id=job["id"])
+    )
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path, "--wait", "--timeout", "5"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.splitlines()[-1] == (
+        f'Error: Batch {job["id"]} still "processing" after 5s. '
+        f"Resume with: mailtester batch wait {job['id']}"
+    )
+    assert sum(clock.sleeps) == 5
+
+
+def test_upload_wait_api_error_points_to_status(respx_mock, api_key, tmp_path, clock):
+    job = upload_job()
+    serve(respx_mock, "batch_upload", UPLOAD, method="POST")
+    serve(respx_mock, "error_502", f"{BASE_URL}/verify/batch/{job['id']}")
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path, "--wait"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.splitlines()[-1] == (
+        "Error: The deliverability engine is currently unavailable. "
+        f"Batch {job['id']} may still be running. "
+        f"Check it with: mailtester batch status {job['id']}"
+    )
+
+
+@pytest.mark.parametrize("extra", [["--format", "csv"], ["--filter", "risky"], ["--timeout", "60"]])
+def test_upload_wait_only_options_require_wait(respx_mock, guard, api_key, tmp_path, extra):
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path, *extra])
+    assert result.exit_code == 2
+    assert "only apply with --wait" in result.stderr
+    assert not guard.called
+
+
+def test_upload_help(respx_mock, guard, api_key):
+    result = runner.invoke(app, ["batch", "upload", "--help"])
+    assert result.exit_code == 0
+    assert "--callback-url" in result.stdout
+    assert "--wait" in result.stdout
+    assert "Upload a CSV, TXT, or XLSX file." in result.stdout
     assert not guard.called

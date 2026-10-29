@@ -1,4 +1,4 @@
-"""The `batch` group: submit, status, wait, and results."""
+"""The `batch` group: submit, upload, status, wait, and results."""
 
 import sys
 from enum import StrEnum
@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 import typer
 
-from mailtester_cli.client import MAX_BATCH_EMAILS, MailTester
+from mailtester_cli.client import MAX_BATCH_EMAILS, MAX_UPLOAD_BYTES, MailTester
 from mailtester_cli.commands._shared import (
     client,
     error_message,
@@ -71,6 +71,15 @@ def _read_emails(file: str) -> list[str]:
     except OSError as exc:
         fail(f"Could not read {source}: {exc.strerror or exc}")
     return [line for line in (raw.strip() for raw in text.splitlines()) if line]
+
+
+def _count_text_lines(data: bytes) -> int | None:
+    """Count non-blank lines when `data` is UTF-8 text; None for binary files such as XLSX."""
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+    return sum(1 for line in text.splitlines() if line.strip())
 
 
 def _check_callback_url(value: str | None) -> None:
@@ -193,6 +202,84 @@ def submit(
 
     with handle_errors(), client() as mt:
         job = mt.submit_batch(emails, name=name, callback_url=callback_url)
+        submitted = f"Submitted batch {job.id} ({fmt_int(job.total_emails)} emails)"
+        if not wait:
+            if get_state(ctx).json:
+                print_json(job.raw)
+            else:
+                typer.echo(submitted)
+            return
+        typer.echo(submitted, err=True)
+        _wait_and_write(
+            mt,
+            job.id,
+            timeout=DEFAULT_WAIT_TIMEOUT if timeout is None else timeout,
+            filter_=filter_ or ResultFilter.all,
+            format_=format_ or ResultFormat.json,
+            resume_hint=f"Check it with: mailtester batch status {job.id}",
+        )
+
+
+@batch_app.command()
+def upload(
+    ctx: typer.Context,
+    file: str = typer.Argument(..., help="CSV, TXT, or XLSX file, sent to the API as is."),
+    name: str | None = typer.Option(None, "--name", help="A name for the batch."),
+    callback_url: str | None = typer.Option(
+        None, "--callback-url", help="URL the API calls when the batch completes."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+    wait: bool = typer.Option(False, "--wait", help="Wait for completion and print results."),
+    timeout: int | None = typer.Option(
+        None,
+        "--timeout",
+        min=0,
+        help=f"With --wait: seconds to wait (default {DEFAULT_WAIT_TIMEOUT}).",
+    ),
+    filter_: ResultFilter | None = WAIT_FILTER_OPTION,
+    format_: ResultFormat | None = WAIT_FORMAT_OPTION,
+) -> None:
+    """Upload a CSV, TXT, or XLSX file. (1 credit per address)"""
+    _check_callback_url(callback_url)
+    if not wait and (timeout, filter_, format_) != (None, None, None):
+        fail("--timeout, --filter, and --format only apply with --wait.", code=2)
+    if file == "-":
+        fail(
+            "batch upload needs a file path, not stdin. "
+            "Pipe addresses to: mailtester batch submit -"
+        )
+    try:
+        size = Path(file).stat().st_size
+    except FileNotFoundError:
+        fail(f"File not found: {file}")
+    except OSError as exc:
+        fail(f"Could not read {file}: {exc.strerror or exc}")
+    if size == 0:
+        fail(f"{file} is empty.")
+    if size > MAX_UPLOAD_BYTES:
+        fail(f"{file} is {size / 1_000_000:.1f} MB; the upload limit is 10 MB.")
+    try:
+        data = Path(file).read_bytes()
+    except OSError as exc:
+        fail(f"Could not read {file}: {exc.strerror or exc}")
+
+    count = _count_text_lines(data)
+    if count is None:
+        typer.echo(
+            f"The address count in {file} isn't known until MailTester reads it. "
+            "This will use 1 credit per address.",
+            err=True,
+        )
+    else:
+        cost = f"{fmt_int(count)} credit{'' if count == 1 else 's'}"
+        typer.echo(f"This will use up to {cost}.", err=True)
+    needs_confirm = (count is None or count >= CONFIRM_THRESHOLD) and not yes
+    if needs_confirm and not _confirm("Continue?"):
+        typer.echo("Aborted.", err=True)
+        raise typer.Exit(1)
+
+    with handle_errors(), client() as mt:
+        job = mt.upload_batch(file, name=name, callback_url=callback_url)
         submitted = f"Submitted batch {job.id} ({fmt_int(job.total_emails)} emails)"
         if not wait:
             if get_state(ctx).json:

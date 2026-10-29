@@ -19,7 +19,7 @@ src/mailtester_cli/
     _shared.py  # State, client(), handle_errors, print_json, fmt_int, fail
     verify.py   # verify, find
     account.py  # lists, credits
-    batch.py    # batch submit/status/wait/results
+    batch.py    # batch submit/upload/status/wait/results
   client.py     # MailTester: key loading, httpx, envelope, error mapping, rate limits
   errors.py     # MailTesterError hierarchy
   models.py     # response types: VerifyResult, BatchJob, FinderResult, Credits, ListJob, ...
@@ -29,7 +29,7 @@ tests/          # pytest suite, never hits the live API
   conftest.py   # load_fixture / load_request / serve / sent_json / sent_form helpers and the mt fixture
   test_cli_verify_find.py  # verify, find, global --json, error mapping
   test_cli_account.py      # lists, credits
-  test_cli_batch.py        # batch submit/status/wait/results, --wait and wait with a fake clock
+  test_cli_batch.py        # batch submit/upload/status/wait/results, --wait and wait with a fake clock
   fixtures/api/ # redacted live responses, plus synthetic 402/429/500/502
 scripts/
   discover.py   # recaptures the fixtures (paid calls need --spend)
@@ -59,13 +59,14 @@ Planned work is tracked in `.specs/BOARD.md`, with one file per SPEC/FEAT/BUG in
 |---|---|---|---|
 | `verify <email>` | `POST /verify` with `email`, plus optional `timeout` (5–60s, default 30) and `smtp_check` (default true) | `verify:single` | 1 credit |
 | `batch submit <file>` | `POST /verify/batch` with `emails[]` (1–10,000), plus optional `name`, `callback_url`, `auto_start` (default true). Returns `201` with `data: {id, status, total_emails, created_at}`. | `verify:batch` | 1 credit per email |
+| `batch upload <file>` | `POST /verify/batch/upload`, multipart with the file in a part named `file` (CSV, TXT, or XLSX, max 10 MB), plus optional form fields `name`, `callback_url`, `auto_start` (`"1"`/`"0"`). Returns `data: {id, status, total_emails, created_at}` like `batch submit`. Returns `201`. `total_emails` is set in the response. A header row is detected, the email column is found by header or content rather than position, and `.xlsx` is parsed. | `verify:batch` | 1 credit per email |
 | `batch status <id>` | `GET /verify/batch/{id}`. Returns `status`, `progress` (0–100, can be fractional, e.g. `12.5`), `total_emails`, `processed_emails`, `valid_emails`, `invalid_emails`, `unknown_emails`, `completed_at`. There's no risky count. | `verify:batch` | free |
 | `batch results <id>` | `GET /verify/batch/{id}/results` with `format` (`json` or `csv`) and `filter` (`all`, `valid`, `invalid`, `risky`, `unknown`). CSV has only the `email,result,reason` columns. Not paginated. Returns `400` (`"Bulk verification is not complete yet"`) until the batch is `completed`. | `verify:batch` | free |
 | `find <first> <last> <domain>` | `POST /finder/email` with `first_name`, `last_name`, `domain`. Returns `email`, `status`, `confidence`, `pattern`, `candidates[]`, `credits_used`. A domain with no MX records returns `422` with a plain `error` string and isn't charged. On a catch-all domain, a name that doesn't exist still returns 15 `risky` candidates at `confidence: 40` and costs 3 credits. | `finder` | 3 credits |
 | `lists` | `GET /lists` with optional `per_page` (1–100, default 25) and `page`. Items are batches (same `id`), with counts nested in `results: {valid, invalid, unknown, catch_all, risky, ...}`. The sub-counts (`role`, `disposable`, ...) are unreliable. | `lists:read` | free |
 | `credits` | `GET /credits` | `credits:read` | free |
 
-Batch flow: submit, keep the returned `id`, poll `batch status` until `status` is `completed`, then fetch `batch results`. Statuses seen so far are `pending` (only with `auto_start: false`; such a batch never starts on its own), `processing`, and `completed`. A 3-email batch took about 30s and an 8-email batch 42s. Poll gently (every few seconds, with backoff) to stay under the rate limit. A `--wait` flag on `batch submit` runs the whole flow in one command, and `batch wait <id>` resumes waiting on any batch. `wait_for_batch` raises `BatchNotStartedError` as soon as a poll returns `pending`, because such a batch never starts on its own. Invalid `format`/`filter` values return `422`. `GET /lists/{id}` and `DELETE /lists/{id}` exist (delete returns `{"success": true, "message": "List deleted"}` with no `data`), but they're out of scope. The API offers more endpoints (webhooks, deliverability, analytics). Add them only when asked, and check the exact request and response shapes against the docs instead of guessing.
+Batch flow: submit, keep the returned `id`, poll `batch status` until `status` is `completed`, then fetch `batch results`. Statuses seen so far are `pending` (only with `auto_start: false`; such a batch never starts on its own), `processing`, and `completed`. A 3-email batch took about 30s and an 8-email batch 42s. Poll gently (every few seconds, with backoff) to stay under the rate limit. A `--wait` flag on `batch submit` runs the whole flow in one command, and `batch upload` does the same for a file, and `batch wait <id>` resumes waiting on any batch. `wait_for_batch` raises `BatchNotStartedError` as soon as a poll returns `pending`, because such a batch never starts on its own. Invalid `format`/`filter` values return `422`. `GET /lists/{id}` and `DELETE /lists/{id}` exist (delete returns `{"success": true, "message": "List deleted"}` with no `data`), but they're out of scope. The API offers more endpoints (webhooks, deliverability, analytics). Add them only when asked, and check the exact request and response shapes against the docs instead of guessing.
 
 ### Verdicts
 

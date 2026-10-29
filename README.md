@@ -95,7 +95,25 @@ $ mailtester batch results 1287 --filter risky --format csv > risky.csv
 
 Batch results don't always match single `verify` results. The API scores batch rows on a different scale (0–10 instead of 0–100, so the same risky address can score 5 in a batch and 50 in `verify`), spells reason codes without underscores (`CATCHALL` vs `CATCH_ALL`), and can even reach a different verdict for the same address. Batch rows also leave out `mx_records`, `spamtrap`, and `did_you_mean`. The CLI shows what the API returns.
 
-Or submit and wait in one step. `--wait` polls until the batch completes, shows progress on stderr, and writes the results to stdout. It takes the same `--filter` and `--format` options as `batch results`. It gives up after `--timeout` seconds (default 1800), but the batch keeps running.
+Real lead files are usually CSV or XLSX exports with several columns. `batch upload` sends such a file to MailTester as is (CSV, TXT, or XLSX, up to 10 MB), and the API picks out the addresses. For a text file the cost line counts its non-blank lines, so a header row makes the estimate one too high. For an XLSX file the count isn't known until MailTester has read it, so the command asks before uploading unless you pass `--yes`. `--name`, `--callback-url`, `--yes`, and `--wait` work as they do for `batch submit`. Reading from stdin isn't supported; pipe addresses to `batch submit -` instead.
+
+```text
+$ mailtester batch upload leads.csv --name "Q3 leads"
+This will use up to 5,401 credits.
+Continue? [y/N]: y
+Submitted batch 1288 (5,400 emails)
+
+$ mailtester batch upload leads.xlsx --yes --wait > results.json
+The address count in leads.xlsx isn't known until MailTester reads it. This will use 1 credit per address.
+Submitted batch 1289 (5,400 emails)
+Batch 1289  processing  12.5%  (675/5,400)
+...
+Batch 1289  completed  100%  (5,400/5,400)
+```
+
+MailTester skips a header row and finds the email column by its header or content, not its position, so a `name,email` export works as is.
+
+Or submit (or upload) and wait in one step. `--wait` polls until the batch completes, shows progress on stderr, and writes the results to stdout. It takes the same `--filter` and `--format` options as `batch results`. It gives up after `--timeout` seconds (default 1800), but the batch keeps running.
 
 ```bash
 mailtester batch submit leads.txt --wait --yes > results.json
