@@ -37,7 +37,8 @@ def fail(message: str, code: int = 1) -> NoReturn:
     raise typer.Exit(code)
 
 
-def _error_message(exc: MailTesterError) -> str:
+def error_message(exc: MailTesterError) -> str:
+    """The API's message, plus the available-credits or retry hint when there is one."""
     message = str(exc)
     if isinstance(exc, InsufficientCreditsError) and exc.available_credits is not None:
         message += f" (available credits: {fmt_int(exc.available_credits)})"
@@ -54,7 +55,7 @@ def handle_errors() -> Iterator[None]:
     try:
         yield
     except MailTesterError as exc:
-        fail(_error_message(exc))
+        fail(error_message(exc))
     except KeyboardInterrupt:
         typer.echo("Interrupted.", err=True)
         raise typer.Exit(130) from None

@@ -9,13 +9,14 @@ import typer
 from mailtester_cli.client import MAX_BATCH_EMAILS, MailTester
 from mailtester_cli.commands._shared import (
     client,
+    error_message,
     fail,
     fmt_int,
     get_state,
     handle_errors,
     print_json,
 )
-from mailtester_cli.errors import BatchTimeoutError
+from mailtester_cli.errors import BatchFailedError, BatchTimeoutError, MailTesterError
 from mailtester_cli.models import BatchJob
 
 CONFIRM_THRESHOLD = 100
@@ -41,20 +42,41 @@ class ResultFormat(StrEnum):
 
 FILTER_OPTION = typer.Option(ResultFilter.all, "--filter", help="Which rows to return.")
 FORMAT_OPTION = typer.Option(ResultFormat.json, "--format", help="Output format.")
+# submit takes these only with --wait, so they default to None to tell "not given" apart.
+WAIT_FILTER_OPTION = typer.Option(
+    None, "--filter", help="With --wait: which rows to return. [default: all]"
+)
+WAIT_FORMAT_OPTION = typer.Option(
+    None, "--format", help="With --wait: output format. [default: json]"
+)
 
 
 def _read_emails(file: str) -> list[str]:
     """Read one address per line from `file` (or stdin for `-`), skipping blank lines."""
-    if file == "-":
-        text = sys.stdin.read()
-    else:
-        try:
-            text = Path(file).read_text(encoding="utf-8-sig")
-        except FileNotFoundError:
-            fail(f"File not found: {file}")
-        except OSError as exc:
-            fail(f"Could not read {file}: {exc.strerror or exc}")
+    source = "stdin" if file == "-" else file
+    try:
+        data = sys.stdin.buffer.read() if file == "-" else Path(file).read_bytes()
+        text = data.decode("utf-8-sig")
+    except FileNotFoundError:
+        fail(f"File not found: {file}")
+    except UnicodeDecodeError:
+        fail(f"Could not read {source}: it isn't UTF-8 text.")
+    except OSError as exc:
+        fail(f"Could not read {source}: {exc.strerror or exc}")
     return [line for line in (raw.strip() for raw in text.splitlines()) if line]
+
+
+def _confirm(question: str) -> bool:
+    # typer.confirm prints the prompt's trailing space to stdout; keep stdout for results only.
+    typer.echo(f"{question} [y/N]: ", err=True, nl=False)
+    answer = sys.stdin.readline()
+    if not answer:
+        typer.echo(err=True)
+    return answer.strip().lower() in {"y", "yes"}
+
+
+def _with_hint(message: str, hint: str) -> str:
+    return f"{message.rstrip('.')}. {hint}"
 
 
 def _status_line(job: BatchJob) -> str:
@@ -79,13 +101,18 @@ def submit(
     name: str | None = typer.Option(None, "--name", help="A name for the batch."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
     wait: bool = typer.Option(False, "--wait", help="Wait for completion and print results."),
-    timeout: int = typer.Option(
-        DEFAULT_WAIT_TIMEOUT, "--timeout", min=0, help="Seconds to wait with --wait."
+    timeout: int | None = typer.Option(
+        None,
+        "--timeout",
+        min=0,
+        help=f"With --wait: seconds to wait. [default: {DEFAULT_WAIT_TIMEOUT}]",
     ),
-    filter_: ResultFilter = FILTER_OPTION,
-    format_: ResultFormat = FORMAT_OPTION,
+    filter_: ResultFilter | None = WAIT_FILTER_OPTION,
+    format_: ResultFormat | None = WAIT_FORMAT_OPTION,
 ) -> None:
     """Submit addresses for bulk verification. (1 credit per address)"""
+    if not wait and (timeout, filter_, format_) != (None, None, None):
+        fail("--timeout, --filter, and --format only apply with --wait.", code=2)
     emails = _read_emails(file)
     count = len(emails)
     if count == 0:
@@ -97,7 +124,7 @@ def submit(
     if count >= CONFIRM_THRESHOLD and not yes:
         if file == "-":
             fail(f"Pass --yes to confirm spending {cost} when reading from stdin.")
-        if not typer.confirm("Continue?", default=False, err=True):
+        if not _confirm("Continue?"):
             typer.echo("Aborted.", err=True)
             raise typer.Exit(1)
 
@@ -115,18 +142,28 @@ def submit(
         try:
             mt.wait_for_batch(
                 job.id,
-                timeout=timeout,
+                timeout=DEFAULT_WAIT_TIMEOUT if timeout is None else timeout,
                 on_poll=lambda polled: typer.echo(_status_line(polled), err=True),
             )
         except BatchTimeoutError as exc:
             fail(f"{exc}. Check later with: {hint}")
+        except BatchFailedError:
+            raise
+        except MailTesterError as exc:
+            # The batch was paid for and may still be running: say how to pick it back up.
+            running = f"Batch {job.id} may still be running. Check it with: {hint}"
+            fail(_with_hint(error_message(exc), running))
         except KeyboardInterrupt:
             typer.echo(
                 f"Stopped waiting. Batch {job.id} is still running. Check it with: {hint}",
                 err=True,
             )
             raise typer.Exit(130) from None
-        _write_results(mt, job.id, filter_, format_)
+        try:
+            _write_results(mt, job.id, filter_ or ResultFilter.all, format_ or ResultFormat.json)
+        except MailTesterError as exc:
+            fetch = f"Batch {job.id} is complete. Fetch it with: mailtester batch results {job.id}"
+            fail(_with_hint(error_message(exc), fetch))
 
 
 @batch_app.command()
