@@ -7,7 +7,7 @@ from conftest import load_fixture, serve
 from typer.testing import CliRunner
 
 from mailtester_cli.cli import app
-from mailtester_cli.client import BASE_URL
+from mailtester_cli.client import BASE_URL, MailTester
 
 LISTS = f"{BASE_URL}/lists"
 HEADER = "ID    NAME       STATUS     EMAILS  VALID  INVALID  RISKY  CREATED"
@@ -54,6 +54,16 @@ def item_1457() -> dict:
 
 def item_1492() -> dict:
     return fixture_data("list_show_pending")
+
+
+def delete_url(list_id: int) -> str:
+    return f"{LISTS}/{list_id}"
+
+
+def serve_deleted(respx_mock, list_id: int):
+    return respx_mock.delete(delete_url(list_id)).respond(
+        200, json={"success": True, "message": "List deleted"}
+    )
 
 
 SHOW_1457 = (
@@ -364,6 +374,126 @@ def test_lists_show_does_not_fetch_table(respx_mock, api_key):
     assert table.call_count == 0
 
 
+# delete
+
+
+def test_delete_prompts_and_deletes_one(respx_mock, api_key):
+    route = serve(respx_mock, "list_delete", delete_url(1492), method="DELETE")
+    result = runner.invoke(app, ["lists", "delete", "1492"], input="y\n")
+    assert result.exit_code == 0
+    assert result.stderr == "Delete list 1492? [y/N]: "
+    assert result.stdout == "Deleted list 1492\n"
+    assert route.call_count == 1
+    assert route.calls.last.request.content == b""
+
+
+def test_delete_prompts_for_several(respx_mock, api_key):
+    first = serve_deleted(respx_mock, 1492)
+    second = serve_deleted(respx_mock, 1493)
+    result = runner.invoke(app, ["lists", "delete", "1492", "1493"], input="y\n")
+    assert result.exit_code == 0
+    assert result.stderr == "Delete 2 lists (1492, 1493)? [y/N]: "
+    assert result.stdout == "Deleted list 1492\nDeleted list 1493\n"
+    assert first.call_count == 1 and second.call_count == 1
+
+
+def test_delete_declined(api_key, guard):
+    result = runner.invoke(app, ["lists", "delete", "1492"], input="n\n")
+    assert result.exit_code == 1
+    assert result.stderr == "Delete list 1492? [y/N]: Aborted.\n"
+    assert result.stdout == ""
+    assert not guard.called
+
+
+def test_delete_eof_declines(api_key, guard):
+    result = runner.invoke(app, ["lists", "delete", "1492"], input="")
+    assert result.exit_code == 1
+    assert result.stderr == "Delete list 1492? [y/N]: \nAborted.\n"
+    assert not guard.called
+
+
+@pytest.mark.parametrize("flag", ["--yes", "-y"])
+def test_delete_yes_skips_prompt(respx_mock, api_key, flag):
+    serve(respx_mock, "list_delete", delete_url(1492), method="DELETE")
+    result = runner.invoke(app, ["lists", "delete", "1492", flag])
+    assert result.exit_code == 0
+    assert result.stderr == ""
+    assert result.stdout == "Deleted list 1492\n"
+
+
+def test_delete_continues_after_failure(respx_mock, api_key):
+    missing = serve(respx_mock, "error_404_list", delete_url(1492), method="DELETE")
+    deleted = serve_deleted(respx_mock, 1493)
+    result = runner.invoke(app, ["lists", "delete", "1492", "1493", "--yes"])
+    assert result.exit_code == 1
+    assert result.stdout == "Deleted list 1493\n"
+    assert result.stderr == f"Error: List 1492: {load_fixture('error_404_list')[2]['error']}\n"
+    assert missing.call_count == 1 and deleted.call_count == 1
+
+
+def test_delete_single_failure_has_no_prefix(respx_mock, api_key):
+    serve(respx_mock, "error_409_list_processing", delete_url(1457), method="DELETE")
+    result = runner.invoke(app, ["lists", "delete", "1457", "--yes"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == (f"Error: {load_fixture('error_409_list_processing')[2]['error']}\n")
+
+
+def test_delete_dedupes_ids(respx_mock, api_key):
+    route = serve(respx_mock, "list_delete", delete_url(1492), method="DELETE")
+    result = runner.invoke(app, ["lists", "delete", "1492", "1492"], input="y\n")
+    assert result.stderr == "Delete list 1492? [y/N]: "
+    assert result.stdout == "Deleted list 1492\n"
+    assert route.call_count == 1
+
+
+def test_delete_requires_an_id(api_key, guard):
+    result = runner.invoke(app, ["lists", "delete"])
+    assert result.exit_code == 2
+    assert not guard.called
+
+
+def test_delete_rejects_non_numeric_id(api_key, guard):
+    result = runner.invoke(app, ["lists", "delete", "abc"])
+    assert result.exit_code == 2
+    assert not guard.called
+
+
+def test_delete_ignores_global_json(respx_mock, api_key):
+    serve(respx_mock, "list_delete", delete_url(1492), method="DELETE")
+    result = runner.invoke(app, ["--json", "lists", "delete", "1492", "--yes"])
+    assert result.exit_code == 0
+    assert result.stdout == "Deleted list 1492\n"
+
+
+def test_delete_interrupted_exits_130(api_key, monkeypatch):
+    def boom(self, list_id):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(MailTester, "delete_list", boom)
+    result = runner.invoke(app, ["lists", "delete", "1492", "--yes"])
+    assert result.exit_code == 130
+    assert result.stderr == "Interrupted.\n"
+    assert result.stdout == ""
+
+
+def test_delete_missing_key(guard):
+    result = runner.invoke(app, ["lists", "delete", "1492", "--yes"])
+    assert result.exit_code == 1
+    assert result.stderr.startswith("Error: ")
+    assert "MAILTESTER_API_KEY" in result.stderr
+    assert not guard.called
+
+
+def test_delete_help():
+    result = runner.invoke(app, ["lists", "delete", "--help"], env={"COLUMNS": "120"})
+    assert result.exit_code == 0
+    assert "--yes" in result.stdout
+    assert "-y" in result.stdout
+    assert "Skip the confirmation prompt." in result.stdout
+    assert "Delete one or more lists and their results. (free)" in result.stdout
+
+
 # help
 
 
@@ -396,4 +526,4 @@ def test_lists_help_shows_options_and_show():
 def test_lists_help_order():
     result = runner.invoke(app, ["lists", "--help"])
     assert result.exit_code == 0
-    assert listed_commands(result.stdout) == ["show"]
+    assert listed_commands(result.stdout) == ["show", "delete"]

@@ -1,4 +1,4 @@
-"""The `lists` group: the table, `lists show`, and (from 022) `lists delete`."""
+"""The `lists` group: the table, `lists show`, and `lists delete`."""
 
 from datetime import UTC, datetime
 
@@ -6,12 +6,15 @@ import typer
 
 from mailtester_cli.commands._shared import (
     client,
+    confirm,
+    error_message,
     fail,
     fmt_int,
     get_state,
     handle_errors,
     print_json,
 )
+from mailtester_cli.errors import MailTesterError
 from mailtester_cli.models import ListJob, ListPage
 
 ALL_PER_PAGE = 100  # --all without --per-page: the fewest requests the API allows
@@ -144,6 +147,40 @@ def show(
         print_json(job.raw)
     else:
         typer.echo(_format_show(job))
+
+
+# Module-level because ruff's B008 flags a call in the default of a list-typed parameter.
+IDS_ARGUMENT = typer.Argument(..., metavar="ID...", help="One or more list ids.")
+
+
+@lists_app.command()
+def delete(
+    ids: list[int] = IDS_ARGUMENT,
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Delete one or more lists and their results. (free)"""
+    ids = list(dict.fromkeys(ids))  # drop repeats, keep the order given
+    if not yes:
+        if len(ids) == 1:
+            question = f"Delete list {ids[0]}?"
+        else:
+            question = f"Delete {len(ids)} lists ({', '.join(map(str, ids))})?"
+        if not confirm(question):
+            typer.echo("Aborted.", err=True)
+            raise typer.Exit(1)
+    failed = False
+    with handle_errors(), client() as mt:
+        for list_id in ids:
+            try:
+                mt.delete_list(list_id)
+            except MailTesterError as exc:
+                prefix = f"List {list_id}: " if len(ids) > 1 else ""
+                typer.echo(f"Error: {prefix}{error_message(exc)}", err=True)
+                failed = True
+            else:
+                typer.echo(f"Deleted list {list_id}")
+    if failed:
+        raise typer.Exit(1)
 
 
 def register(app: typer.Typer) -> None:

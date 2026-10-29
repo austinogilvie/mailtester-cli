@@ -160,12 +160,19 @@ List 1287  Q3 leads  completed  100%  (1,000/1,000)
   started     2026-10-01 09:12:04 UTC
   completed   2026-10-01 09:40:51 UTC
 
+$ mailtester lists delete 1492 1493
+Delete 2 lists (1492, 1493)? [y/N]: y
+Deleted list 1492
+Deleted list 1493
+
 $ mailtester credits
 Balance    5,000 credits
 Account    pay_as_you_go
 ```
 
 `lists` shows 25 lists per page. Use `--page` and `--per-page` to move around, or `--all` to fetch every page. The page hint goes to stderr, so `> file` captures only the table. Accounts with a monthly allowance get an extra `credits` line, for example `Monthly    1,000 (renews 2026-11-01)`.
+
+`lists delete` takes one or more ids and asks once before deleting unless you pass `--yes`. Deleting a list removes its results. Each deleted id prints `Deleted list <id>`; an id that fails prints the API's error and the command carries on, exiting `1` at the end if any id failed. The API refuses to delete a list that's still processing, and the error says so.
 
 ## Python
 

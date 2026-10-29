@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 import re
 
@@ -10,7 +11,7 @@ from typer.testing import CliRunner
 
 from mailtester_cli.cli import app
 from mailtester_cli.client import BASE_URL
-from mailtester_cli.commands._shared import fmt_int, handle_errors
+from mailtester_cli.commands._shared import confirm, fmt_int, handle_errors
 
 VERIFY = f"{BASE_URL}/verify"
 FINDER = f"{BASE_URL}/finder/email"
@@ -201,6 +202,32 @@ def test_fmt_int():
     assert fmt_int(1000) == "1,000"
     assert fmt_int(0) == "0"
     assert fmt_int(None) == "-"
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("y\n", True),
+        ("Y\n", True),
+        ("yes\n", True),
+        (" yes \n", True),
+        ("n\n", False),
+        ("\n", False),
+        ("maybe\n", False),
+    ],
+)
+def test_confirm_answers(monkeypatch, capsys, answer, expected):
+    monkeypatch.setattr("sys.stdin", io.StringIO(answer))
+    assert confirm("Continue?") is expected
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "Continue? [y/N]: "
+
+
+def test_confirm_eof_declines_and_ends_the_line(monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert confirm("Continue?") is False
+    assert capsys.readouterr().err == "Continue? [y/N]: \n"
 
 
 def test_find_domain_without_mx(respx_mock, api_key):
