@@ -1,0 +1,33 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/verify/batch/1491",
+    "params": {},
+    "json": null
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "51",
+    "x-ratelimit-reset": "1793280060"
+  },
+  "body": {
+    "success": true,
+    "data": {
+      "id": 1491,
+      "status": "processing",
+      "progress": 12.5,
+      "total_emails": 8,
+      "processed_emails": 1,
+      "valid_emails": 0,
+      "invalid_emails": 1,
+      "unknown_emails": 0,
+      "created_at": "2026-10-29T13:20:19+00:00",
+      "completed_at": null,
+      "retrieving_results": false,
+      "notice": null
+    }
+  },
+  "synthetic": false
+}

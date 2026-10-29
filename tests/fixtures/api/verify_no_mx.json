@@ -1,0 +1,35 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify",
+    "params": {},
+    "json": {
+      "email": "test@nonexistent-domain-x7q2.invalid"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "43",
+    "x-ratelimit-reset": "1793280120"
+  },
+  "body": {
+    "success": true,
+    "data": {
+      "email": "test@nonexistent-domain-x7q2.invalid",
+      "result": "invalid",
+      "reason": "NO_MX_RECORD",
+      "disposable": false,
+      "role": false,
+      "free": false,
+      "score": 0,
+      "smtp_provider": null,
+      "mx_records": [],
+      "accept_all": false,
+      "spamtrap": false,
+      "did_you_mean": null
+    }
+  },
+  "synthetic": false
+}

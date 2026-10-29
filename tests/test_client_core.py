@@ -453,3 +453,27 @@ def test_injected_client_left_open(respx_mock):
     assert not client.is_closed
     assert "Authorization" not in client.headers
     client.close()
+
+
+# 012 discovery: error shapes seen live
+
+
+def test_422_with_error_string(respx_mock):
+    _, e = raised(respx_mock, "finder_no_mx")
+    assert isinstance(e, ValidationError)
+    assert e.errors == {}
+    assert str(e) == "Domain 'nonexistent-domain-x7q2.invalid' has no mail (MX) records."
+
+
+def test_422_per_item_keys(respx_mock):
+    _, e = raised(respx_mock, "error_422_bad_emails")
+    assert isinstance(e, ValidationError)
+    assert list(e.errors) == ["emails.0", "emails.1"]
+    assert str(e).startswith("emails.0: The emails.0 field must be a valid email address.; ")
+
+
+def test_400_uses_api_message(respx_mock):
+    _, e = raised(respx_mock, "batch_results_not_complete")
+    assert type(e) is MailTesterError
+    assert e.status_code == 400
+    assert str(e) == "Bulk verification is not complete yet"

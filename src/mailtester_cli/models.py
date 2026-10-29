@@ -187,7 +187,7 @@ class ListJob:
     name: str | None
     filename: str | None
     status: str
-    progress: int
+    progress: float
     total_emails: int
     processed_emails: int
     results: ListCounts
@@ -222,13 +222,14 @@ class BatchJob:
 
     The submit response has only `id`, `status`, `total_emails`, and `created_at`, so every
     other field is `None` there. There's no risky count because the API doesn't return one.
+    `progress` is a percentage and can be fractional (12.5 for 1 of 8).
     """
 
     id: int
     status: str
     total_emails: int
     created_at: datetime
-    progress: int | None = None
+    progress: float | None = None
     processed_emails: int | None = None
     valid_emails: int | None = None
     invalid_emails: int | None = None

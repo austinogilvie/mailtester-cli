@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/finder/email",
+    "params": {},
+    "json": {
+      "first_name": "Jane",
+      "last_name": "Doe",
+      "domain": "nonexistent-domain-x7q2.invalid"
+    }
+  },
+  "status": 422,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "38",
+    "x-ratelimit-reset": "1793280120"
+  },
+  "body": {
+    "success": false,
+    "error": "Domain 'nonexistent-domain-x7q2.invalid' has no mail (MX) records."
+  },
+  "synthetic": false
+}

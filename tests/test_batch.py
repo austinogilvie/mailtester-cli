@@ -309,3 +309,31 @@ def test_batch_results_csv_sends_filter(respx_mock, mt):
     route.respond(200, text="email,result,reason\n", headers={"content-type": "text/csv"})
     assert mt.batch_results_csv(1457, filter="risky") == "email,result,reason\n"
     assert route.call_count == 1
+
+
+# 012 discovery: fractional progress, pending batches, and a mixed results page
+
+
+def test_batch_status_fractional_progress(respx_mock, mt):
+    serve(respx_mock, "batch_status_partial", STATUS)
+    job = mt.batch_status(1457)
+    assert job.progress == 12.5
+    assert job.is_complete is False
+
+
+def test_batch_status_pending(respx_mock, mt):
+    serve(respx_mock, "batch_status_pending", STATUS)
+    job = mt.batch_status(1457)
+    assert job.status == "pending"
+    assert job.progress == 0
+    assert job.is_complete is False
+
+
+def test_batch_results_mixed_rows(respx_mock, mt):
+    serve(respx_mock, "batch_results_json_mixed", STATUS + "/results")
+    rows = mt.batch_results(1457)
+    verdicts = [(r.result, r.reason) for r in rows]
+    assert verdicts[0] == ("valid", "VALID")
+    assert ("risky", "ROLEACCOUNT") in verdicts
+    assert ("invalid", "NOMXRECORD") in verdicts
+    assert {r.smtp_provider for r in rows} == {"Other", "Gmail"}

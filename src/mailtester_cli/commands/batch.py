@@ -80,7 +80,7 @@ def _with_hint(message: str, hint: str) -> str:
 
 
 def _status_line(job: BatchJob) -> str:
-    progress = "-" if job.progress is None else f"{job.progress}%"
+    progress = "-" if job.progress is None else f"{job.progress:g}%"
     counts = f"({fmt_int(job.processed_emails)}/{fmt_int(job.total_emails)})"
     return f"Batch {job.id}  {job.status}  {progress}  {counts}"
 
@@ -193,7 +193,14 @@ def results(
 ) -> None:
     """Fetch a batch's results as JSON or CSV. (free)"""
     with handle_errors(), client() as mt:
-        _write_results(mt, batch_id, filter_, format_)
+        try:
+            _write_results(mt, batch_id, filter_, format_)
+        except MailTesterError as exc:
+            # The API answers 400 while the batch is still pending or processing.
+            if exc.status_code != 400:
+                raise
+            hint = f"Check it with: mailtester batch status {batch_id}"
+            fail(_with_hint(error_message(exc), hint))
 
 
 def register(app: typer.Typer) -> None:

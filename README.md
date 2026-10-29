@@ -91,9 +91,9 @@ $ mailtester batch results 1287 > results.json
 $ mailtester batch results 1287 --filter risky --format csv > risky.csv
 ```
 
-`--filter` accepts `all` (the default), `valid`, `invalid`, `risky`, or `unknown`. `--format` accepts `json` (the default) or `csv`. CSV output has only the `email`, `result`, and `reason` columns.
+`--filter` accepts `all` (the default), `valid`, `invalid`, `risky`, or `unknown`. `--format` accepts `json` (the default) or `csv`. CSV output has only the `email`, `result`, and `reason` columns. Asking for results before the batch is `completed` is an error, and the message points you back to `batch status`.
 
-Batch results don't always match single `verify` results. The API scores batch rows on a different scale (the same risky address can score 5 in a batch and 50 in `verify`). Batch rows also leave out `mx_records`, `spamtrap`, and `did_you_mean`. The CLI shows what the API returns.
+Batch results don't always match single `verify` results. The API scores batch rows on a different scale (0–10 instead of 0–100, so the same risky address can score 5 in a batch and 50 in `verify`), spells reason codes without underscores (`CATCHALL` vs `CATCH_ALL`), and can even reach a different verdict for the same address. Batch rows also leave out `mx_records`, `spamtrap`, and `did_you_mean`. The CLI shows what the API returns.
 
 Or submit and wait in one step. `--wait` polls until the batch completes, shows progress on stderr, and writes the results to stdout. It takes the same `--filter` and `--format` options as `batch results`. It gives up after `--timeout` seconds (default 1800), but the batch keeps running, and you can check it later with `batch status`.
 
@@ -160,7 +160,7 @@ job.id               # 123
 
 job = mt.batch_status(job.id)
 job.status           # "processing"
-job.progress         # 64
+job.progress         # 64 (a percentage, can be fractional)
 
 job = mt.wait_for_batch(job.id)          # polls until completed
 results = mt.batch_results(job.id)       # list[VerifyResult]

@@ -1,0 +1,32 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify/batch",
+    "params": {},
+    "json": {
+      "emails": [
+        "not-an-email",
+        "also bad"
+      ]
+    }
+  },
+  "status": 422,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "56",
+    "x-ratelimit-reset": "1793280060"
+  },
+  "body": {
+    "success": false,
+    "errors": {
+      "emails.0": [
+        "The emails.0 field must be a valid email address."
+      ],
+      "emails.1": [
+        "The emails.1 field must be a valid email address."
+      ]
+    }
+  },
+  "synthetic": false
+}

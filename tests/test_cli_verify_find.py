@@ -201,3 +201,13 @@ def test_fmt_int():
     assert fmt_int(1000) == "1,000"
     assert fmt_int(0) == "0"
     assert fmt_int(None) == "-"
+
+
+def test_find_domain_without_mx(respx_mock, api_key):
+    serve(respx_mock, "finder_no_mx", FINDER, method="POST")
+    result = runner.invoke(app, ["find", "Jane", "Doe", "nonexistent-domain-x7q2.invalid"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "Error: Domain 'nonexistent-domain-x7q2.invalid' has no mail (MX) records.\n"
+    )
