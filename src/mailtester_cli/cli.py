@@ -1,12 +1,25 @@
 """Entry point for the `mailtester` command."""
 
 import typer
+from typer.core import TyperGroup
 
 from mailtester_cli import __version__
 from mailtester_cli.commands import account, batch, verify
 from mailtester_cli.commands._shared import State
 
+COMMAND_ORDER = ["verify", "batch", "find", "lists", "credits"]
+
+
+class _OrderedGroup(TyperGroup):
+    # Typer lists plain commands before groups like `batch`; use the README's order instead.
+    def list_commands(self, ctx: typer.Context) -> list[str]:
+        names = super().list_commands(ctx)
+        rank = {name: i for i, name in enumerate(COMMAND_ORDER)}
+        return sorted(names, key=lambda name: rank.get(name, len(rank)))
+
+
 app = typer.Typer(
+    cls=_OrderedGroup,
     help="Verify and find email addresses with the MailTester API.",
     no_args_is_help=True,
     add_completion=False,
@@ -37,7 +50,6 @@ def main(
     ctx.obj = State(json=json_output)
 
 
-# Registration order is the order `--help` lists the commands in.
 verify.register(app)
 batch.register(app)
 account.register(app)
