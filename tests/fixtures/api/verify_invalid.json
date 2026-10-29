@@ -1,0 +1,41 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify",
+    "params": {},
+    "json": {
+      "email": "nobody@freemail.example"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "44",
+    "x-ratelimit-reset": "1793280120"
+  },
+  "body": {
+    "success": true,
+    "data": {
+      "email": "nobody@freemail.example",
+      "result": "invalid",
+      "reason": "INVALID",
+      "disposable": false,
+      "role": false,
+      "free": true,
+      "score": 0,
+      "smtp_provider": null,
+      "mx_records": [
+        "gmail-smtp-in.l.google.com",
+        "alt1.gmail-smtp-in.l.google.com",
+        "alt2.gmail-smtp-in.l.google.com",
+        "alt3.gmail-smtp-in.l.google.com",
+        "alt4.gmail-smtp-in.l.google.com"
+      ],
+      "accept_all": false,
+      "spamtrap": false,
+      "did_you_mean": null
+    }
+  },
+  "synthetic": false
+}

@@ -28,7 +28,8 @@ from mailtester_cli.models import BatchJob, Credits, FinderResult, ListJob, Veri
 BASE_URL = "https://app.mailtester.com/api/v1"
 ENV_VAR = "MAILTESTER_API_KEY"
 MAX_BATCH_EMAILS = 10_000
-# Assumed names: only "processing" and "completed" have been observed.
+# Assumed names: only "pending" (auto_start=false), "processing", and "completed" have been
+# observed. A "pending" batch never starts on its own, so wait_for_batch times out on it.
 FAILURE_STATUSES = frozenset({"failed", "cancelled", "canceled", "error"})
 
 T = TypeVar("T")

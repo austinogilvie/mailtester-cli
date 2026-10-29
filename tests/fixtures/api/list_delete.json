@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "DELETE",
+    "path": "/lists/1492",
+    "params": {},
+    "json": null
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "52",
+    "x-ratelimit-reset": "1793280180"
+  },
+  "body": {
+    "success": true,
+    "message": "List deleted"
+  },
+  "synthetic": false
+}

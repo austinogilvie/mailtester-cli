@@ -1,0 +1,109 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/verify/batch/1491/results",
+    "params": {},
+    "json": null
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "53",
+    "x-ratelimit-reset": "1793280120"
+  },
+  "body": {
+    "success": true,
+    "data": [
+      {
+        "email": "support@example.com",
+        "result": "valid",
+        "reason": "VALID",
+        "score": 9,
+        "free": false,
+        "role": true,
+        "disposable": false,
+        "accept_all": false,
+        "smtp_provider": "Other"
+      },
+      {
+        "email": "noreply@example.com",
+        "result": "risky",
+        "reason": "CATCHALL",
+        "score": 5,
+        "free": false,
+        "role": true,
+        "disposable": false,
+        "accept_all": true,
+        "smtp_provider": "Other"
+      },
+      {
+        "email": "support@example.org",
+        "result": "risky",
+        "reason": "ROLEACCOUNT",
+        "score": 5,
+        "free": false,
+        "role": true,
+        "disposable": false,
+        "accept_all": false,
+        "smtp_provider": "Other"
+      },
+      {
+        "email": "hello@example.org",
+        "result": "invalid",
+        "reason": "INVALID",
+        "score": 0,
+        "free": false,
+        "role": true,
+        "disposable": false,
+        "accept_all": false,
+        "smtp_provider": "Other"
+      },
+      {
+        "email": "support@example.net",
+        "result": "risky",
+        "reason": "CATCHALL",
+        "score": 5,
+        "free": false,
+        "role": true,
+        "disposable": false,
+        "accept_all": true,
+        "smtp_provider": "Other"
+      },
+      {
+        "email": "press@example.net",
+        "result": "risky",
+        "reason": "CATCHALL",
+        "score": 5,
+        "free": false,
+        "role": true,
+        "disposable": false,
+        "accept_all": true,
+        "smtp_provider": "Other"
+      },
+      {
+        "email": "nobody@freemail.example",
+        "result": "risky",
+        "reason": "CATCHALL",
+        "score": 5,
+        "free": true,
+        "role": false,
+        "disposable": false,
+        "accept_all": true,
+        "smtp_provider": "Gmail"
+      },
+      {
+        "email": "test@nonexistent-domain-x7q2.invalid",
+        "result": "invalid",
+        "reason": "NOMXRECORD",
+        "score": 0,
+        "free": false,
+        "role": false,
+        "disposable": false,
+        "accept_all": false,
+        "smtp_provider": "Other"
+      }
+    ]
+  },
+  "synthetic": false
+}

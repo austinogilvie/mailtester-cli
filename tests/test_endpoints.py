@@ -147,3 +147,18 @@ def test_credits_parses_balance(respx_mock, mt):
     assert credits.next_renewal is None
     assert credits.account_type == "pay_as_you_go"
     assert not hasattr(credits, "plan")
+
+
+def test_verify_parses_invalid(respx_mock, mt):
+    serve(respx_mock, "verify_invalid", VERIFY, method="POST")
+    result = mt.verify("nobody@freemail.example")
+    assert (result.result, result.reason, result.score) == ("invalid", "INVALID", 0)
+    assert result.free is True
+    assert len(result.mx_records) == 5
+
+
+def test_verify_parses_no_mx(respx_mock, mt):
+    serve(respx_mock, "verify_no_mx", VERIFY, method="POST")
+    result = mt.verify("test@nonexistent-domain-x7q2.invalid")
+    assert (result.result, result.reason) == ("invalid", "NO_MX_RECORD")
+    assert result.mx_records == []

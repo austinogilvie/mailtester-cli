@@ -464,3 +464,38 @@ def test_wait_results_error_points_to_results(respx_mock, api_key, tmp_path, clo
         "Error: Verification failed: SMTP connection error. "
         "Batch 1457 is complete. Fetch it with: mailtester batch results 1457"
     )
+
+
+# 012 discovery
+
+
+def test_status_pending(respx_mock, api_key):
+    serve(respx_mock, "batch_status_pending", STATUS)
+    result = runner.invoke(app, ["batch", "status", "1457"])
+    assert result.exit_code == 0
+    assert result.stdout == "Batch 1492  pending  0%  (0/1)\n"
+
+
+def test_status_fractional_progress(respx_mock, api_key):
+    serve(respx_mock, "batch_status_partial", STATUS)
+    result = runner.invoke(app, ["batch", "status", "1457"])
+    assert result.exit_code == 0
+    assert result.stdout == "Batch 1491  processing  12.5%  (1/8)\n"
+
+
+def test_results_not_complete_points_to_status(respx_mock, api_key):
+    serve(respx_mock, "batch_results_not_complete", RESULTS)
+    result = runner.invoke(app, ["batch", "results", "1457"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "Error: Bulk verification is not complete yet. "
+        "Check it with: mailtester batch status 1457\n"
+    )
+
+
+def test_results_other_errors_have_no_status_hint(respx_mock, api_key):
+    serve(respx_mock, "error_500", RESULTS)
+    result = runner.invoke(app, ["batch", "results", "1457"])
+    assert result.exit_code == 1
+    assert result.stderr == "Error: Verification failed: SMTP connection error\n"
