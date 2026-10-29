@@ -66,7 +66,7 @@ class VerifyResult:
 
 @dataclass(frozen=True)
 class FinderCandidate:
-    """One address pattern the finder tried."""
+    """One address a finder checked: a name pattern for a person, or a role mailbox."""
 
     email: str
     status: str
@@ -115,6 +115,39 @@ class FinderResult:
             last_name=data["last_name"],
             domain=data["domain"],
             candidates=[FinderCandidate.from_dict(c) for c in data.get("candidates") or []],
+            credits_used=data["credits_used"],
+            raw=data,
+        )
+
+
+@dataclass(frozen=True)
+class RoleFinderResult:
+    """Role mailboxes at a domain, from `POST /finder/domain` or `POST /finder/company`.
+
+    `company` is the echoed name from the company finder and `None` from the domain finder;
+    `offset` is `None` from the company finder, which doesn't return one. `total` can exceed
+    `len(emails)`: the API returns at most `limit` (10) mailboxes per call. A null or missing
+    `emails` reads as an empty list, like `FinderResult.candidates`.
+    """
+
+    domain: str
+    company: str | None
+    emails: list[FinderCandidate]
+    total: int
+    limit: int
+    offset: int | None
+    credits_used: int
+    raw: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> RoleFinderResult:
+        return cls(
+            domain=data["domain"],
+            company=data.get("company"),
+            emails=[FinderCandidate.from_dict(item) for item in data.get("emails") or []],
+            total=data["total"],
+            limit=data["limit"],
+            offset=data.get("offset"),
             credits_used=data["credits_used"],
             raw=data,
         )

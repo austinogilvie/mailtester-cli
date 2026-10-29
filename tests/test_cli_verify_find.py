@@ -15,7 +15,7 @@ from mailtester_cli.commands._shared import confirm, fmt_int, handle_errors
 
 VERIFY = f"{BASE_URL}/verify"
 FINDER = f"{BASE_URL}/finder/email"
-README_ORDER = ["verify", "batch", "find", "lists", "credits"]
+README_ORDER = ["verify", "batch", "find", "find-domain", "find-company", "lists", "credits"]
 
 runner = CliRunner()
 
@@ -31,7 +31,7 @@ def fixture_data(name: str) -> dict:
 
 def listed_commands(help_text: str) -> list[str]:
     section = help_text.split("Commands", 1)[1]
-    return re.findall(r"^│ (\w+)\s", section, flags=re.MULTILINE)
+    return re.findall(r"^│ ([\w-]+)\s", section, flags=re.MULTILINE)
 
 
 # app
@@ -107,6 +107,7 @@ def test_find_human_output(respx_mock, api_key):
     result = runner.invoke(app, ["find", "Jane", "Doe", "example.com"])
     assert result.exit_code == 0
     assert result.stdout == "jane.doe@example.com  risky  confidence=40  pattern={first}.{last}\n"
+    assert result.stderr == "This will use 3 credits.\n"
 
 
 def test_find_omits_missing_pattern(respx_mock, api_key):
@@ -127,7 +128,9 @@ def test_find_not_found(respx_mock, api_key):
     result = runner.invoke(app, ["find", "Jane", "Doe", "example.com"])
     assert result.exit_code == 1
     assert result.stdout == ""
-    assert result.stderr == "No address found for Jane Doe at example.com.\n"
+    assert result.stderr == (
+        "This will use 3 credits.\nNo address found for Jane Doe at example.com.\n"
+    )
 
 
 def test_find_not_found_json_still_prints_payload(respx_mock, api_key):
@@ -236,5 +239,5 @@ def test_find_domain_without_mx(respx_mock, api_key):
     assert result.exit_code == 1
     assert result.stdout == ""
     assert result.stderr == (
-        "Error: Domain 'nonexistent-domain-x7q2.invalid' has no mail (MX) records.\n"
+        f"This will use 3 credits.\nError: {load_fixture('finder_no_mx')[2]['error']}\n"
     )

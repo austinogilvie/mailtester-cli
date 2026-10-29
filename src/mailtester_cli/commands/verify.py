@@ -1,4 +1,4 @@
-"""`verify` and `find` commands."""
+"""`verify` command."""
 
 import typer
 
@@ -42,27 +42,5 @@ def verify(
         typer.echo(_format_verify(result))
 
 
-def find(
-    ctx: typer.Context,
-    first: str = typer.Argument(..., help="First name."),
-    last: str = typer.Argument(..., help="Last name."),
-    domain: str = typer.Argument(..., help="Domain, e.g. acme.com."),
-) -> None:
-    """Find a person's email from name + domain. (3 credits)"""
-    with handle_errors(), client() as mt:
-        result = mt.find_email(first, last, domain)
-    if get_state(ctx).json:
-        print_json(result.raw)
-    elif result.email:
-        line = f"{result.email}  {result.status}  confidence={result.confidence}"
-        if result.pattern:
-            line += f"  pattern={result.pattern}"
-        typer.echo(line)
-    if not result.email:
-        typer.echo(f"No address found for {first} {last} at {domain}.", err=True)
-        raise typer.Exit(1)
-
-
 def register(app: typer.Typer) -> None:
     app.command()(verify)
-    app.command()(find)

@@ -41,21 +41,23 @@ $ mailtester --help
 
  Verify and find email addresses with the MailTester API.
 
-╭─ Options ──────────────────────────────────────────────────────────╮
-│ --json         Print raw JSON instead of formatted output.         │
-│ --version      Show the version and exit.                          │
-│ --help         Show this message and exit.                         │
-╰────────────────────────────────────────────────────────────────────╯
-╭─ Commands ─────────────────────────────────────────────────────────╮
-│ verify    Verify a single email address. (1 credit)                │
-│ batch     Submit, track, and fetch bulk verification jobs.         │
-│ find      Find a person's email from name + domain. (3 credits)    │
-│ lists     List, inspect, and delete your bulk verification jobs.   │
-│ credits   Show your credit balance.                                │
-╰────────────────────────────────────────────────────────────────────╯
+╭─ Options ───────────────────────────────────────────────────────────────╮
+│ --json             Print raw JSON instead of formatted output.          │
+│ --version          Show the version and exit.                           │
+│ --help             Show this message and exit.                          │
+╰─────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ──────────────────────────────────────────────────────────────╮
+│ verify        Verify a single email address. (1 credit)                 │
+│ batch         Submit, track, and fetch bulk verification jobs.          │
+│ find          Find a person's email from name + domain. (3 credits)     │
+│ find-domain   Find role mailboxes at a domain. (3 credits)              │
+│ find-company  Find a company's domain and role mailboxes. (3 credits)   │
+│ lists         List, inspect, and delete your bulk verification jobs.    │
+│ credits       Show your credit balance.                                 │
+╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
-Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` API or runtime error (including a `find` with no match), `2` usage error, `130` interrupted.
+Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` API or runtime error (including `find`, `find-domain`, or `find-company` with no match), `2` usage error, `130` interrupted.
 
 ### Verify one address
 
@@ -132,10 +134,34 @@ Batch 1288  completed  100%  (5,400/5,400)
 
 ```text
 $ mailtester find Jane Doe acme.com
+This will use 3 credits.
 jane.doe@acme.com  valid  confidence=95  pattern={first}.{last}
 ```
 
 The finder tries several address patterns. Use `--json` to see every candidate.
+
+### Find role mailboxes
+
+```text
+$ mailtester find-domain acme.com
+This will use 3 credits.
+info@acme.com     risky  confidence=55
+contact@acme.com  risky  confidence=55
+support@acme.com  risky  confidence=55
+sales@acme.com    risky  confidence=55
+team@acme.com     risky  confidence=55
+
+$ mailtester find-company "Acme Inc"
+This will use 3 credits.
+Resolved Acme Inc to acme.com.
+info@acme.com     risky  confidence=55
+contact@acme.com  risky  confidence=55
+support@acme.com  risky  confidence=55
+sales@acme.com    risky  confidence=55
+team@acme.com     risky  confidence=55
+```
+
+`find-domain` checks the usual role mailboxes (`info@`, `sales@`, `support@`, ...) at a domain; `find-company` resolves a company name to its domain first and prints the domain it chose on stderr. Both cost 3 credits whether or not anything is found. A call returns at most 10 mailboxes; when there are more, `Showing 10 of 20 role mailboxes.` goes to stderr. On a catch-all domain every mailbox comes back `risky` at `confidence=40` and a note on stderr says so. Nothing found means a message on stderr and exit `1`. Use `--json` for `is_catch_all`, `reason`, and `total`.
 
 ### Lists and credits
 
@@ -232,6 +258,13 @@ match.status         # "valid"
 match.confidence     # 95
 match.candidates     # list[FinderCandidate], one per pattern tried
 
+roles = mt.find_domain("acme.com")       # RoleFinderResult, 3 credits found or not
+roles.emails                             # list[FinderCandidate]: info@, support@, sales@, ...
+roles.total                              # 5; at most roles.limit (10) come back per call
+
+company = mt.find_company("Acme Inc")    # resolves the name first; same shape plus .company
+company.domain                           # "acme.com"
+
 for job in mt.lists():                   # the first page, 25 lists
     print(job.id, job.name, job.status)
 
@@ -276,7 +309,7 @@ except MailTesterError as e:
 | Module | Contents |
 |---|---|
 | `mailtester_cli.client` | `MailTester`, the API client. Also importable from `mailtester_cli`. |
-| `mailtester_cli.models` | `VerifyResult`, `FinderResult`, `BatchJob`, `ListJob`, `ListPage`, `Credits`, and other response types |
+| `mailtester_cli.models` | `VerifyResult`, `FinderResult`, `RoleFinderResult`, `BatchJob`, `ListJob`, `ListPage`, `Credits`, and other response types |
 | `mailtester_cli.errors` | `MailTesterError` and its subclasses |
 | `mailtester_cli.cli` | The `mailtester` Typer app |
 
