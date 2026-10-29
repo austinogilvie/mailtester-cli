@@ -269,8 +269,7 @@ def test_wait_timeout(respx_mock, api_key, tmp_path, clock):
     assert result.exit_code == 1
     assert result.stdout == ""
     assert result.stderr.splitlines()[-1] == (
-        'Error: Batch 1457 still "processing" after 5s. '
-        "Check later with: mailtester batch status 1457"
+        'Error: Batch 1457 still "processing" after 5s. Resume with: mailtester batch wait 1457'
     )
     assert sum(clock.sleeps) == 5
 
@@ -285,7 +284,7 @@ def test_wait_interrupted(respx_mock, api_key, tmp_path, monkeypatch):
     result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, EMAILS), "--wait"])
     assert result.exit_code == 130
     assert result.stderr.splitlines()[-1] == (
-        "Stopped waiting. Batch 1457 is still running. Check it with: mailtester batch status 1457"
+        "Stopped waiting. Batch 1457 is still running. Resume with: mailtester batch wait 1457"
     )
 
 
@@ -499,3 +498,163 @@ def test_results_other_errors_have_no_status_hint(respx_mock, api_key):
     result = runner.invoke(app, ["batch", "results", "1457"])
     assert result.exit_code == 1
     assert result.stderr == "Error: Verification failed: SMTP connection error\n"
+
+
+# batch wait
+
+
+def test_wait_command_prints_json_results(respx_mock, api_key, clock):
+    respx_mock.get(STATUS).mock(
+        side_effect=[
+            status_response("batch_status_processing"),
+            status_response("batch_status_completed"),
+        ]
+    )
+    serve_results(respx_mock, "batch_results_json_all")
+    result = runner.invoke(app, ["batch", "wait", "1457"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == json_rows()
+    assert result.stderr.splitlines() == [PROCESSING, COMPLETED]
+    assert clock.sleeps == [3.0]
+
+
+def test_wait_command_completed_immediately_prints_one_line(respx_mock, api_key, clock):
+    serve(respx_mock, "batch_status_completed", STATUS)
+    serve_results(respx_mock, "batch_results_json_all")
+    result = runner.invoke(app, ["batch", "wait", "1457"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == json_rows()
+    assert result.stderr == f"{COMPLETED}\n"
+    assert clock.sleeps == []
+
+
+def test_wait_command_csv(respx_mock, api_key, clock):
+    serve(respx_mock, "batch_status_completed", STATUS)
+    serve_results(respx_mock, "batch_results_csv_all", format_="csv")
+    args = ["batch", "wait", "1457", "--format", "csv", "--filter", "all"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0
+    assert result.stdout == csv_text()
+
+
+def test_wait_command_filter_risky(respx_mock, api_key, clock):
+    serve(respx_mock, "batch_status_completed", STATUS)
+    route = serve_results(respx_mock, "batch_results_json_risky", filter_="risky")
+    result = runner.invoke(app, ["batch", "wait", "1457", "--filter", "risky"])
+    assert result.exit_code == 0
+    assert route.called
+    rows = json.loads(result.stdout)
+    assert len(rows) == 2
+    assert rows == json_rows("batch_results_json_risky")
+
+
+def test_wait_command_ignores_global_json(respx_mock, api_key, clock):
+    serve(respx_mock, "batch_status_completed", STATUS)
+    serve_results(respx_mock, "batch_results_csv_all", format_="csv")
+    result = runner.invoke(app, ["--json", "batch", "wait", "1457", "--format", "csv"])
+    assert result.exit_code == 0
+    assert result.stdout == csv_text()
+
+
+def test_wait_command_pending_fails_fast(respx_mock, api_key, clock):
+    route = serve(respx_mock, "batch_status_pending", f"{BASE_URL}/verify/batch/1492")
+    result = runner.invoke(app, ["batch", "wait", "1492"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "Error: Batch 1492 is pending and won't start on its own. "
+        "Start it in the MailTester app, then run this again.\n"
+    )
+    assert route.call_count == 1
+    assert clock.sleeps == []
+
+
+def test_wait_command_timeout(respx_mock, api_key, clock):
+    serve(respx_mock, "batch_status_processing", STATUS)
+    result = runner.invoke(app, ["batch", "wait", "1457", "--timeout", "5"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.splitlines()[-1] == (
+        'Error: Batch 1457 still "processing" after 5s. Resume with: mailtester batch wait 1457'
+    )
+    assert sum(clock.sleeps) == 5
+
+
+def test_wait_command_not_found(respx_mock, api_key, clock):
+    route = serve(respx_mock, "error_404", f"{BASE_URL}/verify/batch/999999999")
+    result = runner.invoke(app, ["batch", "wait", "999999999"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == "Error: Bulk verification not found\n"
+    assert route.call_count == 1
+
+
+def test_wait_command_api_error_says_resume(respx_mock, api_key, clock):
+    serve(respx_mock, "error_502", STATUS)
+    result = runner.invoke(app, ["batch", "wait", "1457"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.splitlines()[-1] == (
+        "Error: The deliverability engine is currently unavailable. "
+        "Batch 1457 may still be running. Resume with: mailtester batch wait 1457"
+    )
+
+
+def test_wait_command_results_error_points_to_results(respx_mock, api_key, clock):
+    serve(respx_mock, "batch_status_completed", STATUS)
+    serve(respx_mock, "error_500", RESULTS)
+    result = runner.invoke(app, ["batch", "wait", "1457"])
+    assert result.exit_code == 1
+    assert result.stderr.splitlines()[-1] == (
+        "Error: Verification failed: SMTP connection error. "
+        "Batch 1457 is complete. Fetch it with: mailtester batch results 1457"
+    )
+
+
+def test_wait_command_failed_status(respx_mock, api_key, clock):
+    respx_mock.get(STATUS).mock(
+        return_value=status_response("batch_status_processing", status="failed")
+    )
+    result = runner.invoke(app, ["batch", "wait", "1457"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    # The failed poll prints its status line first, as any successful poll does.
+    assert result.stderr.splitlines()[-1] == 'Error: Batch 1457 ended with status "failed"'
+
+
+def test_wait_command_interrupted(respx_mock, api_key, monkeypatch):
+    def interrupt(seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(MailTester, "_sleep", staticmethod(interrupt))
+    serve(respx_mock, "batch_status_processing", STATUS)
+    result = runner.invoke(app, ["batch", "wait", "1457"])
+    assert result.exit_code == 130
+    assert result.stderr.splitlines()[-1] == (
+        "Stopped waiting. Batch 1457 is still running. Resume with: mailtester batch wait 1457"
+    )
+
+
+@pytest.mark.parametrize("option", ["--filter", "--format"])
+def test_wait_command_bad_choice(respx_mock, guard, api_key, option):
+    result = runner.invoke(app, ["batch", "wait", "1457", option, "bogus"])
+    assert result.exit_code == 2
+    assert not guard.called
+
+
+def test_wait_command_rejects_non_numeric_id(respx_mock, guard, api_key):
+    result = runner.invoke(app, ["batch", "wait", "abc"])
+    assert result.exit_code == 2
+    assert not guard.called
+
+
+def test_batch_help_order(respx_mock, guard, api_key):
+    result = runner.invoke(app, ["batch", "--help"])
+    assert result.exit_code == 0
+    names = [
+        line.split()[1]
+        for line in result.stdout.splitlines()
+        if line.startswith("│ ") and not line.startswith("│ --")
+    ]
+    assert names == ["submit", "status", "wait", "results"]
+    assert not guard.called

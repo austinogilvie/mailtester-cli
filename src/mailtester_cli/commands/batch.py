@@ -1,4 +1,4 @@
-"""The `batch` group: submit, status, and results."""
+"""The `batch` group: submit, status, wait, and results."""
 
 import sys
 from enum import StrEnum
@@ -16,7 +16,13 @@ from mailtester_cli.commands._shared import (
     handle_errors,
     print_json,
 )
-from mailtester_cli.errors import BatchFailedError, BatchTimeoutError, MailTesterError
+from mailtester_cli.errors import (
+    BatchFailedError,
+    BatchNotStartedError,
+    BatchTimeoutError,
+    MailTesterError,
+    NotFoundError,
+)
 from mailtester_cli.models import BatchJob
 
 CONFIRM_THRESHOLD = 100
@@ -94,6 +100,49 @@ def _write_results(
         print_json([row.raw for row in mt.batch_results(batch_id, filter=filter_.value)])
 
 
+def _wait_and_write(
+    mt: MailTester,
+    batch_id: int,
+    *,
+    timeout: int,
+    filter_: ResultFilter,
+    format_: ResultFormat,
+    resume_hint: str,
+) -> None:
+    """Poll `batch_id` with status lines on stderr, then write its results to stdout.
+
+    `resume_hint` is the sentence appended after an API error while polling, for example
+    `Check it with: mailtester batch status 1457`.
+    """
+    wait_cmd = f"mailtester batch wait {batch_id}"
+    try:
+        mt.wait_for_batch(
+            batch_id,
+            timeout=timeout,
+            on_poll=lambda polled: typer.echo(_status_line(polled), err=True),
+        )
+    except BatchNotStartedError as exc:
+        fail(_with_hint(str(exc), "Start it in the MailTester app, then run this again."))
+    except BatchTimeoutError as exc:
+        fail(_with_hint(str(exc), f"Resume with: {wait_cmd}"))
+    except (BatchFailedError, NotFoundError):
+        raise
+    except MailTesterError as exc:
+        running = f"Batch {batch_id} may still be running. {resume_hint}"
+        fail(_with_hint(error_message(exc), running))
+    except KeyboardInterrupt:
+        typer.echo(
+            f"Stopped waiting. Batch {batch_id} is still running. Resume with: {wait_cmd}",
+            err=True,
+        )
+        raise typer.Exit(130) from None
+    try:
+        _write_results(mt, batch_id, filter_, format_)
+    except MailTesterError as exc:
+        fetch = f"Batch {batch_id} is complete. Fetch it with: mailtester batch results {batch_id}"
+        fail(_with_hint(error_message(exc), fetch))
+
+
 @batch_app.command()
 def submit(
     ctx: typer.Context,
@@ -138,32 +187,14 @@ def submit(
                 typer.echo(submitted)
             return
         typer.echo(submitted, err=True)
-        hint = f"mailtester batch status {job.id}"
-        try:
-            mt.wait_for_batch(
-                job.id,
-                timeout=DEFAULT_WAIT_TIMEOUT if timeout is None else timeout,
-                on_poll=lambda polled: typer.echo(_status_line(polled), err=True),
-            )
-        except BatchTimeoutError as exc:
-            fail(f"{exc}. Check later with: {hint}")
-        except BatchFailedError:
-            raise
-        except MailTesterError as exc:
-            # The batch was paid for and may still be running: say how to pick it back up.
-            running = f"Batch {job.id} may still be running. Check it with: {hint}"
-            fail(_with_hint(error_message(exc), running))
-        except KeyboardInterrupt:
-            typer.echo(
-                f"Stopped waiting. Batch {job.id} is still running. Check it with: {hint}",
-                err=True,
-            )
-            raise typer.Exit(130) from None
-        try:
-            _write_results(mt, job.id, filter_ or ResultFilter.all, format_ or ResultFormat.json)
-        except MailTesterError as exc:
-            fetch = f"Batch {job.id} is complete. Fetch it with: mailtester batch results {job.id}"
-            fail(_with_hint(error_message(exc), fetch))
+        _wait_and_write(
+            mt,
+            job.id,
+            timeout=DEFAULT_WAIT_TIMEOUT if timeout is None else timeout,
+            filter_=filter_ or ResultFilter.all,
+            format_=format_ or ResultFormat.json,
+            resume_hint=f"Check it with: mailtester batch status {job.id}",
+        )
 
 
 @batch_app.command()
@@ -182,6 +213,27 @@ def status(
         typer.echo(
             f"  valid {fmt_int(job.valid_emails)}  invalid {fmt_int(job.invalid_emails)}"
             f"  unknown {fmt_int(job.unknown_emails)}"
+        )
+
+
+@batch_app.command()
+def wait(
+    batch_id: int = typer.Argument(..., metavar="ID", help="Batch id from `batch submit`."),
+    timeout: int = typer.Option(
+        DEFAULT_WAIT_TIMEOUT, "--timeout", min=0, help="Seconds to wait before giving up."
+    ),
+    filter_: ResultFilter = FILTER_OPTION,
+    format_: ResultFormat = FORMAT_OPTION,
+) -> None:
+    """Wait for a batch to complete and print its results."""
+    with handle_errors(), client() as mt:
+        _wait_and_write(
+            mt,
+            batch_id,
+            timeout=timeout,
+            filter_=filter_,
+            format_=format_,
+            resume_hint=f"Resume with: mailtester batch wait {batch_id}",
         )
 
 

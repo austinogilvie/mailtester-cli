@@ -95,10 +95,19 @@ $ mailtester batch results 1287 --filter risky --format csv > risky.csv
 
 Batch results don't always match single `verify` results. The API scores batch rows on a different scale (0–10 instead of 0–100, so the same risky address can score 5 in a batch and 50 in `verify`), spells reason codes without underscores (`CATCHALL` vs `CATCH_ALL`), and can even reach a different verdict for the same address. Batch rows also leave out `mx_records`, `spamtrap`, and `did_you_mean`. The CLI shows what the API returns.
 
-Or submit and wait in one step. `--wait` polls until the batch completes, shows progress on stderr, and writes the results to stdout. It takes the same `--filter` and `--format` options as `batch results`. It gives up after `--timeout` seconds (default 1800), but the batch keeps running, and you can check it later with `batch status`.
+Or submit and wait in one step. `--wait` polls until the batch completes, shows progress on stderr, and writes the results to stdout. It takes the same `--filter` and `--format` options as `batch results`. It gives up after `--timeout` seconds (default 1800), but the batch keeps running.
 
 ```bash
 mailtester batch submit leads.txt --wait --yes > results.json
+```
+
+If a wait is interrupted or times out, or you submitted without `--wait`, `batch wait` picks it up: it polls the same way, prints progress to stderr, and writes the results to stdout with the same `--filter`, `--format`, and `--timeout` options. A batch created with `auto_start: false` is `pending` and never starts on its own, so `batch wait` says so and exits instead of polling.
+
+```text
+$ mailtester batch wait 1288 --format csv > results.csv
+Batch 1288  processing  64%  (3,456/5,400)
+Batch 1288  processing  71.2%  (3,845/5,400)
+Batch 1288  completed  100%  (5,400/5,400)
 ```
 
 ### Find an address
@@ -166,6 +175,8 @@ job = mt.wait_for_batch(job.id)          # polls until completed
 results = mt.batch_results(job.id)       # list[VerifyResult]
 risky = mt.batch_results(job.id, filter="risky")
 csv_text = mt.batch_results_csv(job.id)  # str with columns email,result,reason
+# wait_for_batch raises BatchNotStartedError if the batch is pending (auto_start=False),
+# BatchFailedError on a failure status, and BatchTimeoutError after `timeout` seconds.
 
 valid = [r.email for r in results if r.is_valid]
 ```
@@ -195,6 +206,7 @@ from mailtester_cli.errors import (
     AuthenticationError,      # 401
     InsufficientCreditsError, # 402
     RateLimitError,           # 429
+    BatchNotStartedError,     # wait_for_batch: the batch is pending and won't start on its own
 )
 
 try:

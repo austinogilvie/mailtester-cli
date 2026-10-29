@@ -17,6 +17,7 @@ from mailtester_cli import __version__
 from mailtester_cli.errors import (
     APIConnectionError,
     BatchFailedError,
+    BatchNotStartedError,
     BatchTimeoutError,
     MailTesterError,
     MissingAPIKeyError,
@@ -29,7 +30,8 @@ BASE_URL = "https://app.mailtester.com/api/v1"
 ENV_VAR = "MAILTESTER_API_KEY"
 MAX_BATCH_EMAILS = 10_000
 # Assumed names: only "pending" (auto_start=false), "processing", and "completed" have been
-# observed. A "pending" batch never starts on its own, so wait_for_batch times out on it.
+# observed. A "pending" batch never starts on its own, so wait_for_batch raises
+# BatchNotStartedError on it instead of timing out.
 FAILURE_STATUSES = frozenset({"failed", "cancelled", "canceled", "error"})
 
 T = TypeVar("T")
@@ -243,9 +245,10 @@ class MailTester:
     ) -> BatchJob:
         """Poll until the batch is completed, backing off from `interval` to `max_interval`.
 
-        Raises BatchFailedError on a failure status and BatchTimeoutError after `timeout`
-        seconds. A 429 waits for `retry_after` (or `max_interval`); if that wait would pass
-        the deadline, the RateLimitError propagates. Other errors propagate too.
+        Raises BatchNotStartedError on "pending", BatchFailedError on a failure status, and
+        BatchTimeoutError after `timeout` seconds. A 429 waits for `retry_after` (or
+        `max_interval`); if that wait would pass the deadline, the RateLimitError propagates.
+        Other errors propagate too.
         """
         if interval <= 0 or max_interval <= 0 or timeout < 0:
             raise ValueError("interval and max_interval must be positive, timeout non-negative")
@@ -260,6 +263,8 @@ class MailTester:
                     raise
                 self._sleep(wait)
                 continue
+            if job.status == "pending":
+                raise BatchNotStartedError(job)
             if on_poll is not None:
                 on_poll(job)
             if job.status == "completed":
