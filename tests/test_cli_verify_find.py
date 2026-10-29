@@ -41,12 +41,7 @@ def test_help_lists_commands_in_readme_order():
     assert result.exit_code == 0
     assert "--json" in result.stdout
     assert "--version" in result.stdout
-    listed = listed_commands(result.stdout)
-    assert {"verify", "find"} <= set(listed)
-    assert set(listed) <= set(README_ORDER)
-    # Order holds for whatever is registered. Once 009 and 010 land, tighten this to
-    # `listed == README_ORDER`.
-    assert listed == [name for name in README_ORDER if name in listed]
+    assert listed_commands(result.stdout) == README_ORDER
 
 
 # verify

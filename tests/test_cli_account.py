@@ -135,6 +135,5 @@ def test_help_lists_account_commands_after_find():
     section = result.stdout.split("Commands", 1)[1]
     listed = re.findall(r"^│ (\w+)\s", section, flags=re.MULTILINE)
     assert listed.index("find") < listed.index("lists") < listed.index("credits")
-    assert listed[-2:] == ["lists", "credits"]
     assert "List your bulk verification jobs." in result.stdout
     assert "Show your credit balance." in result.stdout
