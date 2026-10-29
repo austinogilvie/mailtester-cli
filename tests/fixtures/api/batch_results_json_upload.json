@@ -1,0 +1,43 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/verify/batch/1498/results",
+    "params": {},
+    "json": null
+  },
+  "status": 200,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "41",
+    "x-ratelimit-reset": "1793285820"
+  },
+  "body": {
+    "success": true,
+    "data": [
+      {
+        "email": "alice@example.com",
+        "result": "invalid",
+        "reason": "NOMXRECORD",
+        "score": 0,
+        "free": false,
+        "role": false,
+        "disposable": false,
+        "accept_all": false,
+        "smtp_provider": "Other"
+      },
+      {
+        "email": "bob@example.com",
+        "result": "invalid",
+        "reason": "NOMXRECORD",
+        "score": 0,
+        "free": false,
+        "role": false,
+        "disposable": false,
+        "accept_all": false,
+        "smtp_provider": "Other"
+      }
+    ]
+  },
+  "synthetic": false
+}
