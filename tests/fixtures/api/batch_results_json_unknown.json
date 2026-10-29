@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/verify/batch/1457/results",
+    "params": {
+      "format": "json",
+      "filter": "unknown"
+    },
+    "json": null
+  },
+  "status": 200,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "39",
+    "x-ratelimit-reset": "1793234580",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": true,
+    "data": []
+  },
+  "synthetic": false
+}

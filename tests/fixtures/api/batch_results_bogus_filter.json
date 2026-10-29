@@ -1,0 +1,27 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/verify/batch/1457/results",
+    "params": {
+      "format": "json",
+      "filter": "bogus"
+    },
+    "json": null
+  },
+  "status": 422,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "37",
+    "x-ratelimit-reset": "1793234580",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": false,
+    "errors": {
+      "filter": [
+        "The selected filter is invalid."
+      ]
+    }
+  },
+  "synthetic": false
+}

@@ -1,0 +1,46 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/verify/batch/1457/results",
+    "params": {
+      "format": "json",
+      "filter": "risky"
+    },
+    "json": null
+  },
+  "status": 200,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "40",
+    "x-ratelimit-reset": "1793234580",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": true,
+    "data": [
+      {
+        "email": "batch1@example.com",
+        "result": "risky",
+        "reason": "CATCHALL",
+        "score": 5,
+        "free": false,
+        "role": false,
+        "disposable": false,
+        "accept_all": true,
+        "smtp_provider": "Other"
+      },
+      {
+        "email": "batch2@example.com",
+        "result": "risky",
+        "reason": "CATCHALL",
+        "score": 5,
+        "free": false,
+        "role": false,
+        "disposable": false,
+        "accept_all": true,
+        "smtp_provider": "Other"
+      }
+    ]
+  },
+  "synthetic": false
+}

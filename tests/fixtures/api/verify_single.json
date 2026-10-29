@@ -1,0 +1,42 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify",
+    "params": {},
+    "json": {
+      "email": "batch1@example.com",
+      "smtp_check": true
+    }
+  },
+  "status": 200,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "52",
+    "x-ratelimit-reset": "1793234520",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": true,
+    "data": {
+      "email": "batch1@example.com",
+      "result": "risky",
+      "reason": "CATCH_ALL",
+      "disposable": false,
+      "role": false,
+      "free": false,
+      "score": 50,
+      "smtp_provider": null,
+      "mx_records": [
+        "aspmx.l.google.com",
+        "alt1.aspmx.l.google.com",
+        "alt2.aspmx.l.google.com",
+        "alt3.aspmx.l.google.com",
+        "alt4.aspmx.l.google.com"
+      ],
+      "accept_all": true,
+      "spamtrap": false,
+      "did_you_mean": null
+    }
+  },
+  "synthetic": false
+}

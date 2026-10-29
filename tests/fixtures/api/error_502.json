@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify",
+    "params": {},
+    "json": {
+      "email": "verify@example.com"
+    }
+  },
+  "status": 502,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": false,
+    "error": "The deliverability engine is currently unavailable."
+  },
+  "synthetic": true
+}

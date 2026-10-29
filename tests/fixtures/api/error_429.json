@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify",
+    "params": {},
+    "json": {
+      "email": "verify@example.com"
+    }
+  },
+  "status": 429,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "0",
+    "x-ratelimit-reset": "1793203200",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": false,
+    "error": "Rate limit exceeded",
+    "retry_after": 30
+  },
+  "synthetic": true
+}

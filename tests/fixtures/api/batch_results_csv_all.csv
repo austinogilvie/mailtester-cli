@@ -1,0 +1,4 @@
+email,result,reason
+batch1@example.com,risky,CATCHALL
+batch2@example.com,risky,CATCHALL
+batch3@example.net,invalid,DISPOSABLE

@@ -1,0 +1,30 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/credits",
+    "params": {},
+    "json": null
+  },
+  "status": 200,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "35",
+    "x-ratelimit-reset": "1793234580",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": true,
+    "data": {
+      "balance": 93,
+      "monthly_credits": 0,
+      "monthly_credit_amount": 0,
+      "rollover_credits": 0,
+      "reserved_credits": 0,
+      "total_purchased": 0,
+      "total_used": 7,
+      "next_renewal": null,
+      "account_type": "pay_as_you_go"
+    }
+  },
+  "synthetic": false
+}

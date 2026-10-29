@@ -1,0 +1,26 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify/batch",
+    "params": {},
+    "json": {
+      "emails": []
+    }
+  },
+  "status": 422,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "32",
+    "x-ratelimit-reset": "1793234580",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": false,
+    "errors": {
+      "emails": [
+        "The emails field is required."
+      ]
+    }
+  },
+  "synthetic": false
+}

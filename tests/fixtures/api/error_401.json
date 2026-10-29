@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/credits",
+    "params": {},
+    "json": null
+  },
+  "status": 401,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "34",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": false,
+    "error": "Invalid API key"
+  },
+  "synthetic": false
+}

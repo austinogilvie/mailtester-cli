@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify",
+    "params": {},
+    "json": {
+      "email": "verify@example.com"
+    }
+  },
+  "status": 402,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": false,
+    "error": "Insufficient credits",
+    "available_credits": 0
+  },
+  "synthetic": true
+}

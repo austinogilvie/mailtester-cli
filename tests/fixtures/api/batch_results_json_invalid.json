@@ -1,0 +1,35 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/verify/batch/1457/results",
+    "params": {
+      "format": "json",
+      "filter": "invalid"
+    },
+    "json": null
+  },
+  "status": 200,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "41",
+    "x-ratelimit-reset": "1793234580",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": true,
+    "data": [
+      {
+        "email": "batch3@example.net",
+        "result": "invalid",
+        "reason": "DISPOSABLE",
+        "score": 0,
+        "free": false,
+        "role": false,
+        "disposable": true,
+        "accept_all": false,
+        "smtp_provider": "Other"
+      }
+    ]
+  },
+  "synthetic": false
+}

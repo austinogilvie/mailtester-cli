@@ -1,0 +1,155 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/finder/email",
+    "params": {},
+    "json": {
+      "first_name": "Jane",
+      "last_name": "Doe",
+      "domain": "example.com"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "51",
+    "x-ratelimit-reset": "1793234520",
+    "content-type": "application/json"
+  },
+  "body": {
+    "success": true,
+    "data": {
+      "email": "jane.doe@example.com",
+      "status": "risky",
+      "confidence": 40,
+      "pattern": "{first}.{last}",
+      "first_name": "Jane",
+      "last_name": "Doe",
+      "domain": "example.com",
+      "candidates": [
+        {
+          "email": "jane.doe@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "janedoe@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "ldoe@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "janet@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "jane@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "l.doe@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "jane_doe@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "jane-doe@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "doe.jane@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "doejane@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "batch1@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "doel@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "lt@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "jane.t@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        },
+        {
+          "email": "tjane@example.com",
+          "status": "risky",
+          "confidence": 40,
+          "is_role": false,
+          "is_catch_all": true,
+          "reason": "CATCH_ALL"
+        }
+      ],
+      "credits_used": 3
+    }
+  },
+  "synthetic": false
+}

@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/verify/batch/1457/results",
+    "params": {
+      "format": "csv",
+      "filter": "all"
+    },
+    "json": null
+  },
+  "status": 200,
+  "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "43",
+    "x-ratelimit-reset": "1793234580",
+    "content-type": "text/csv; charset=utf-8"
+  },
+  "body_file": "batch_results_csv_all.csv",
+  "synthetic": false
+}
