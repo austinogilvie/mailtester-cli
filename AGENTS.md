@@ -55,7 +55,7 @@ Planned work is tracked in `.specs/BOARD.md`, with one file per SPEC/FEAT/BUG in
 
 ### Endpoints in scope
 
-| Command (proposed) | Method + path | Scope | Cost |
+| Command | Method + path | Scope | Cost |
 |---|---|---|---|
 | `verify <email>` | `POST /verify` with `email`, plus optional `timeout` (5–60s, default 30) and `smtp_check` (default true) | `verify:single` | 1 credit |
 | `batch submit <file>` | `POST /verify/batch` with `emails[]` (1–10,000), plus optional `name`, `callback_url`, `auto_start` (default true). Returns `201` with `data: {id, status, total_emails, created_at}`. | `verify:batch` | 1 credit per email |
