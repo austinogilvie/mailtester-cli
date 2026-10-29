@@ -44,10 +44,10 @@ FILTER_OPTION = typer.Option(ResultFilter.all, "--filter", help="Which rows to r
 FORMAT_OPTION = typer.Option(ResultFormat.json, "--format", help="Output format.")
 # submit takes these only with --wait, so they default to None to tell "not given" apart.
 WAIT_FILTER_OPTION = typer.Option(
-    None, "--filter", help="With --wait: which rows to return. [default: all]"
+    None, "--filter", help="With --wait: which rows to return (default all)."
 )
 WAIT_FORMAT_OPTION = typer.Option(
-    None, "--format", help="With --wait: output format. [default: json]"
+    None, "--format", help="With --wait: output format (default json)."
 )
 
 
@@ -105,7 +105,7 @@ def submit(
         None,
         "--timeout",
         min=0,
-        help=f"With --wait: seconds to wait. [default: {DEFAULT_WAIT_TIMEOUT}]",
+        help=f"With --wait: seconds to wait (default {DEFAULT_WAIT_TIMEOUT}).",
     ),
     filter_: ResultFilter | None = WAIT_FILTER_OPTION,
     format_: ResultFormat | None = WAIT_FORMAT_OPTION,

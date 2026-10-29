@@ -2,12 +2,14 @@
 
 Verify and find email addresses from your terminal or from Python code with the [MailTester](https://app.mailtester.com) API.
 
-> **Status: pre-release.** This README describes the planned interface. The CLI and Python API below are the targets that implementation works toward.
+> **Status: v0.1.0.** The first release. The CLI and the Python client below are both built and tested.
 
 ## Install
 
 ```bash
 uv tool install git+https://github.com/austinogilvie/mailtester-cli
+# or pin this release:
+uv tool install git+https://github.com/austinogilvie/mailtester-cli@v0.1.0
 ```
 
 Or, for development:
@@ -27,6 +29,8 @@ cp .env.example .env
 # then edit .env:
 MAILTESTER_API_KEY=evp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
+
+An environment variable wins over `.env`. `mailtester` looks for `.env` in the directory you run it from (and its parents), so an installed `mailtester` still finds your project's key.
 
 ## CLI
 
@@ -50,6 +54,8 @@ $ mailtester --help
 │ credits   Show your credit balance.                                │
 ╰────────────────────────────────────────────────────────────────────╯
 ```
+
+Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` API or runtime error (including a `find` with no match), `2` usage error, `130` interrupted.
 
 ### Verify one address
 
