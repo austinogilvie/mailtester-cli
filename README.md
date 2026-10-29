@@ -50,7 +50,7 @@ $ mailtester --help
 │ verify    Verify a single email address. (1 credit)                │
 │ batch     Submit, track, and fetch bulk verification jobs.         │
 │ find      Find a person's email from name + domain. (3 credits)    │
-│ lists     List your bulk verification jobs.                        │
+│ lists     List, inspect, and delete your bulk verification jobs.   │
 │ credits   Show your credit balance.                                │
 ╰────────────────────────────────────────────────────────────────────╯
 ```
@@ -143,13 +143,29 @@ The finder tries several address patterns. Use `--json` to see every candidate.
 $ mailtester lists
 ID    NAME      STATUS     EMAILS  VALID  INVALID  RISKY  CREATED
 1287  Q3 leads  completed   1,000    820       90     60  2026-10-01
+Page 1 of 3 (57 lists). Use --page 2 or --all for more.
+
+$ mailtester lists --all --json | jq '.[] | select(.status == "pending") | .id'
+1492
+1493
+
+$ mailtester lists show 1287
+List 1287  Q3 leads  completed  100%  (1,000/1,000)
+  valid       820
+  invalid     90
+  risky       60
+  unknown     30
+  credits     1,000
+  created     2026-10-01 09:12:03 UTC
+  started     2026-10-01 09:12:04 UTC
+  completed   2026-10-01 09:40:51 UTC
 
 $ mailtester credits
 Balance    5,000 credits
 Account    pay_as_you_go
 ```
 
-Accounts with a monthly allowance get an extra line, for example `Monthly    1,000 (renews 2026-11-01)`.
+`lists` shows 25 lists per page. Use `--page` and `--per-page` to move around, or `--all` to fetch every page. The page hint goes to stderr, so `> file` captures only the table. Accounts with a monthly allowance get an extra `credits` line, for example `Monthly    1,000 (renews 2026-11-01)`.
 
 ## Python
 
