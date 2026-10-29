@@ -26,7 +26,7 @@ src/mailtester_cli/
   __init__.py   # __version__ and the MailTester export
   __main__.py   # python -m support
 tests/          # pytest suite, never hits the live API
-  conftest.py   # load_fixture / load_request / serve / sent_json helpers and the mt fixture
+  conftest.py   # load_fixture / load_request / serve / sent_json / sent_form helpers and the mt fixture
   test_cli_verify_find.py  # verify, find, global --json, error mapping
   test_cli_account.py      # lists, credits
   test_cli_batch.py        # batch submit/status/wait/results, --wait and wait with a fake clock

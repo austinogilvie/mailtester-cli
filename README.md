@@ -166,6 +166,7 @@ emails = ["user1@example.com", "user2@example.com", "user3@example.com"]
 
 job = mt.submit_batch(emails, name="Q3 leads")
 job.id               # 123
+job = mt.upload_batch("leads.csv", name="Q3 leads")  # CSV, TXT, or XLSX, up to 10 MB, sent as is
 
 job = mt.batch_status(job.id)
 job.status           # "processing"

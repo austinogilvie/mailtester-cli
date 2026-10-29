@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from types import TracebackType
 from typing import Any, TypeVar
 
@@ -29,6 +30,7 @@ from mailtester_cli.models import BatchJob, Credits, FinderResult, ListJob, Veri
 BASE_URL = "https://app.mailtester.com/api/v1"
 ENV_VAR = "MAILTESTER_API_KEY"
 MAX_BATCH_EMAILS = 10_000
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # the docs say "max 10 MB" without a unit
 # Assumed names: only "pending" (auto_start=false), "processing", and "completed" have been
 # observed. A "pending" batch never starts on its own, so wait_for_batch raises
 # BatchNotStartedError on it instead of timing out.
@@ -152,11 +154,24 @@ class MailTester:
             self._client.close()
 
     def _request(
-        self, method: str, path: str, *, params: dict | None = None, json: Any = None
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json: Any = None,
+        data: dict | None = None,
+        files: dict | None = None,
     ) -> httpx.Response:
         try:
             response = self._client.request(
-                method, self.base_url + path, params=params, json=json, headers=self._headers
+                method,
+                self.base_url + path,
+                params=params,
+                json=json,
+                data=data,
+                files=files,
+                headers=self._headers,
             )
         except httpx.TransportError as exc:
             detail = (str(exc) or type(exc).__name__).replace(self._api_key, "***")
@@ -166,8 +181,17 @@ class MailTester:
             raise error_from_response(response)
         return response
 
-    def _data(self, method: str, path: str, *, params: dict | None = None, json: Any = None) -> Any:
-        response = self._request(method, path, params=params, json=json)
+    def _data(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json: Any = None,
+        data: dict | None = None,
+        files: dict | None = None,
+    ) -> Any:
+        response = self._request(method, path, params=params, json=json, data=data, files=files)
         try:
             body = response.json()
         except ValueError:
@@ -229,6 +253,44 @@ class MailTester:
         if auto_start is not None:
             body["auto_start"] = auto_start
         return _parse(BatchJob.from_dict, self._data("POST", "/verify/batch", json=body))
+
+    def upload_batch(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        name: str | None = None,
+        callback_url: str | None = None,
+        auto_start: bool | None = None,
+    ) -> BatchJob:
+        """Upload a CSV, TXT, or XLSX file for bulk verification. 1 credit per address.
+
+        The file goes to the API unchanged, up to MAX_UPLOAD_BYTES. Raises ValueError for an
+        empty or oversize file before any request. FileNotFoundError and other OSErrors from
+        reading the file propagate.
+        """
+        file = Path(path)
+        size = file.stat().st_size
+        if size == 0:
+            raise ValueError(f"{file.name} is empty")
+        if size > MAX_UPLOAD_BYTES:
+            raise ValueError(
+                f"{file.name} is {size:,} bytes; the upload limit is {MAX_UPLOAD_BYTES:,} bytes"
+            )
+        form: dict[str, str] = {}
+        if name is not None:
+            form["name"] = name
+        if callback_url is not None:
+            form["callback_url"] = callback_url
+        if auto_start is not None:
+            form["auto_start"] = "1" if auto_start else "0"
+        with file.open("rb") as fh:
+            data = self._data(
+                "POST",
+                "/verify/batch/upload",
+                data=form or None,
+                files={"file": (file.name, fh)},
+            )
+        return _parse(BatchJob.from_dict, data)
 
     def batch_status(self, batch_id: int | str) -> BatchJob:
         """Return a batch's current status and counts."""
