@@ -119,12 +119,24 @@ def test_role_finder_result_empty():
     assert result.domain == "example.org"
 
 
-@pytest.mark.parametrize("key", ["domain", "emails", "total", "limit", "credits_used"])
+@pytest.mark.parametrize("key", ["domain", "total", "limit", "credits_used"])
 def test_role_finder_result_missing_required_key(key):
     payload = dict(data("finder_domain"))
     del payload[key]
     with pytest.raises(KeyError):
         RoleFinderResult.from_dict(payload)
+
+
+@pytest.mark.parametrize("emails", ["null", "missing"])
+def test_role_finder_result_null_or_missing_emails_is_empty(emails):
+    payload = dict(data("finder_domain"))
+    if emails == "null":
+        payload["emails"] = None
+    else:
+        del payload["emails"]
+    result = RoleFinderResult.from_dict(payload)
+    assert result.emails == []
+    assert result.total == 5  # the rest of the payload is read as usual
 
 
 def test_role_finder_result_nested_candidates_keep_raw():

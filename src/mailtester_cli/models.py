@@ -126,7 +126,8 @@ class RoleFinderResult:
 
     `company` is the echoed name from the company finder and `None` from the domain finder;
     `offset` is `None` from the company finder, which doesn't return one. `total` can exceed
-    `len(emails)`: the API returns at most `limit` (10) mailboxes per call.
+    `len(emails)`: the API returns at most `limit` (10) mailboxes per call. A null or missing
+    `emails` reads as an empty list, like `FinderResult.candidates`.
     """
 
     domain: str
@@ -143,7 +144,7 @@ class RoleFinderResult:
         return cls(
             domain=data["domain"],
             company=data.get("company"),
-            emails=[FinderCandidate.from_dict(item) for item in data["emails"]],
+            emails=[FinderCandidate.from_dict(item) for item in data.get("emails") or []],
             total=data["total"],
             limit=data["limit"],
             offset=data.get("offset"),

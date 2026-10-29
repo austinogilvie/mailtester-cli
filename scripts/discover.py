@@ -23,11 +23,12 @@ A --no-start batch is free, and recording it also captures GET /lists/{id} and D
 An XLSX file can't be counted locally, so a started upload of one is refused: use --no-start.
 
 The role-mailbox finders (015) take one input each. The empty-body probes that name their
-request fields run with the free steps; the five paid steps cost 3 each at most:
+request fields run (free) whenever a finder flag is given, before the five paid steps, which
+cost 3 each at most:
 
     uv run python scripts/discover.py --spend \\
         --find-domain company.com --find-company "Company Inc" \\
-        --find-company-missing "Zxqv Nonexistent Holdings" \\
+        --find-company-missing "Zxqv Imaginary Holdings" \\
         --find-domain-catchall catchall.com --find-domain-nomx nonexistent-domain-x7q2.invalid
 
 The balance is read after each finder call. A first call that costs more than 3 skips the
@@ -68,6 +69,10 @@ VERIFY_COST, FIND_COST = 1, 3
 FINDER_FIELDS = {"domain": "domain", "company": "company"}
 # Statuses a no-match finder step may answer with and still count as recorded, not failed.
 NO_MATCH_STATUSES = (404, 422)
+# Words of a company name that identify nothing on their own, so they aren't redacted alone.
+GENERIC_COMPANY_WORDS = frozenset(
+    ("inc", "ltd", "llc", "corp", "company", "group", "holdings", "limited", "the", "and")
+)
 
 
 class Stop(Exception):
@@ -245,6 +250,8 @@ class Recorder:
         file_name: str | None = None,
         scrub_names: bool = False,
     ) -> None:
+        # Before anything is redacted: a domain the API resolved, and we never sent, is real too.
+        _register_domains(self.redactor, _data(resp))
         request = resp.request
         sent: dict[str, Any] = {
             "method": request.method,
@@ -317,14 +324,17 @@ def run_finder_probes(rec: Recorder) -> dict[str, str]:
     """Steps 4dp and 4cp: empty POSTs to the role finders. Free, and the 422 names the fields.
 
     Returns the request field each finder requires, read from the probe when it answers with a
-    one-key `errors` map and FINDER_FIELDS otherwise. A status other than 422 is recorded and
-    printed, not fatal: nothing was sent, so nothing can have been charged.
+    one-key `errors` map and FINDER_FIELDS otherwise. A status other than 422 is printed and
+    not saved, so the recorded `finder_{kind}_422` fixture is never overwritten with something
+    else. It isn't fatal either: nothing was sent, so nothing can have been charged.
     """
     fields = dict(FINDER_FIELDS)
     for kind, step in (("domain", "4dp"), ("company", "4cp")):
-        resp = rec.call(step, f"finder_{kind}_422", "POST", f"/finder/{kind}", json_body={})
+        resp = rec.client.post(f"/finder/{kind}", json={})
         if resp.status_code != 422:
-            print(f"[{step:>3}] expected 422 from an empty body, got {resp.status_code}")
+            print(f"[{step:>3}] expected 422 from an empty body, got {resp.status_code}; not saved")
+            continue
+        rec.save(step, f"finder_{kind}_422", resp, json_body={})
         fields[kind] = _required_field(resp, fields[kind])
         if fields[kind] != FINDER_FIELDS[kind]:
             print(f"[{step:>3}] /finder/{kind} takes `{fields[kind]}`, not `{FINDER_FIELDS[kind]}`")
@@ -349,19 +359,13 @@ def _register_domains(redactor: Redactor, data: Any) -> None:
             _register_domains(redactor, value)
 
 
-def finder_call(rec: Recorder, step: str, name: str, path: str, body: dict) -> httpx.Response:
-    """POST to a finder and save the response, registering any resolved domain before saving."""
-    resp = rec.client.post(path, json=body)
-    _register_domains(rec.redactor, _data(resp))
-    rec.save(step, name, resp, json_body=body)
-    return resp
-
-
 class Budget:
     """Reads the balance after each paid finder step and stops before the plan is exceeded.
 
     `unit` is what one finder call costs: FIND_COST until the first paid step shows more.
-    Without a readable balance nothing is checked and the planned_cost gate is the only guard.
+    When the baseline balance can't be read nothing is checked and the planned_cost gate is the
+    only guard. When it could be read and a later read fails, the run stops: the spend can't be
+    tracked any more, and guessing would let it drift past the plan.
     """
 
     def __init__(self, rec: Recorder, cap: int) -> None:
@@ -384,9 +388,11 @@ class Budget:
     def check(self, step: str) -> int:
         """Print the balance after `step` and return that step's cost. Raises Stop above the cap."""
         now = self.balance()
-        if self.before is None or now is None:
+        if self.before is None:
             print(f"[{step:>3}] GET /credits -> balance unknown; the cost isn't checked")
             return FIND_COST
+        if now is None:
+            raise Stop(f"step {step}: the balance couldn't be read; not running further paid steps")
         cost, self.spent = self.before - now - self.spent, self.before - now
         print(f"[{step:>3}] GET /credits -> balance {now} (step {cost}, run total {self.spent})")
         if self.spent > self.cap:
@@ -420,7 +426,8 @@ def run_finders(rec: Recorder, args: argparse.Namespace, fields: dict[str, str])
     per_mailbox = False
     if args.find_domain:
         body = {fields["domain"]: args.find_domain}
-        expect_ok("4d", finder_call(rec, "4d", "finder_domain", "/finder/domain", body))
+        resp = rec.call("4d", "finder_domain", "POST", "/finder/domain", json_body=body)
+        expect_ok("4d", resp)
         cost = budget.check("4d")
         if cost > FIND_COST:
             print(f"[ 4d] cost {cost}, not {FIND_COST}: per-mailbox pricing? skipping step 4dc")
@@ -429,12 +436,13 @@ def run_finders(rec: Recorder, args: argparse.Namespace, fields: dict[str, str])
     if args.find_company:
         budget.allow("4c")
         body = {fields["company"]: args.find_company}
-        expect_ok("4c", finder_call(rec, "4c", "finder_company", "/finder/company", body))
+        resp = rec.call("4c", "finder_company", "POST", "/finder/company", json_body=body)
+        expect_ok("4c", resp)
         budget.check("4c")
     if args.find_company_missing:
         budget.allow("4cm")
         body = {fields["company"]: args.find_company_missing}
-        resp = finder_call(rec, "4cm", "finder_company_missing", "/finder/company", body)
+        resp = rec.call("4cm", "finder_company_missing", "POST", "/finder/company", json_body=body)
         expect_ok("4cm", resp, allow=NO_MATCH_STATUSES)
         budget.check("4cm")
     if args.find_domain_catchall and per_mailbox:
@@ -442,13 +450,13 @@ def run_finders(rec: Recorder, args: argparse.Namespace, fields: dict[str, str])
     elif args.find_domain_catchall:
         budget.allow("4dc")
         body = {fields["domain"]: args.find_domain_catchall}
-        resp = finder_call(rec, "4dc", "finder_domain_catch_all", "/finder/domain", body)
+        resp = rec.call("4dc", "finder_domain_catch_all", "POST", "/finder/domain", json_body=body)
         expect_ok("4dc", resp)
         budget.check("4dc")
     if args.find_domain_nomx:
         budget.allow("4dn")
         body = {fields["domain"]: args.find_domain_nomx}
-        resp = finder_call(rec, "4dn", "finder_domain_no_mx", "/finder/domain", body)
+        resp = rec.call("4dn", "finder_domain_no_mx", "POST", "/finder/domain", json_body=body)
         expect_ok("4dn", resp, allow=NO_MATCH_STATUSES)
         budget.check("4dn")
 
@@ -638,9 +646,9 @@ def build_redactor(args: argparse.Namespace, key: str) -> Redactor:
         if _redactable(domain):
             r.domain(domain)
     if args.find_company:
-        r.name(args.find_company, "Acme")
+        _register_company(r, args.find_company, "Acme")
     if args.find_company_missing:
-        r.name(args.find_company_missing, "Nowhere")
+        _register_company(r, args.find_company_missing, "Nowhere")
     if args.verify_email:
         r.email(args.verify_email, "verify")
     for i, email in enumerate(args.batch or [], 1):
@@ -658,6 +666,21 @@ def build_redactor(args: argparse.Namespace, key: str) -> Redactor:
             if re.search(r"[A-Za-z]", first) and not EMAIL_RE.fullmatch(first):
                 r.name(first, f"Person{i}")
     return r
+
+
+def _register_company(r: Redactor, name: str, placeholder: str) -> None:
+    """Register a company name whole, then each distinctive word of it, under one placeholder.
+
+    The API may echo part of the name ("Acme Widgets" for "Acme Widgets Ltd"), which the whole
+    phrase would neither replace nor catch in the leak check. Names are matched longest first,
+    so the phrase still wins where it appears. Short words, generic company words, and a word
+    equal to the placeholder itself (which would flag every fixture as a leak) are skipped.
+    """
+    r.name(name, placeholder)
+    for word in re.findall(r"\w+", name):
+        low = word.lower()
+        if len(word) >= 4 and low not in GENERIC_COMPANY_WORDS and low != placeholder.lower():
+            r.name(word, placeholder)
 
 
 def _upload_lines(path: Path) -> list[str] | None:
@@ -788,7 +811,8 @@ def main(argv: list[str] | None = None) -> int:
         params = {"per_page": 5}
         lists_resp = rec.call("2", "lists", "GET", "/lists", params=params, scrub_names=True)
         run_list_pages(rec, lists_resp)
-        fields = run_finder_probes(rec)
+        # The probes are free, but they only matter when a role finder is about to be called.
+        fields = run_finder_probes(rec) if finder_cost(args) else dict(FINDER_FIELDS)
         batch_id = args.batch_id
         try:
             if cost or args.upload or (args.batch and args.no_start):
