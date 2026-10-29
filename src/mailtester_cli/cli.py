@@ -4,10 +4,10 @@ import typer
 from typer.core import TyperGroup
 
 from mailtester_cli import __version__
-from mailtester_cli.commands import account, batch, lists, verify
+from mailtester_cli.commands import account, batch, finder, lists, verify
 from mailtester_cli.commands._shared import State
 
-COMMAND_ORDER = ["verify", "batch", "find", "lists", "credits"]
+COMMAND_ORDER = ["verify", "batch", "find", "find-domain", "find-company", "lists", "credits"]
 
 
 class _OrderedGroup(TyperGroup):
@@ -51,6 +51,7 @@ def main(
 
 
 verify.register(app)
+finder.register(app)
 batch.register(app)
 lists.register(app)
 account.register(app)

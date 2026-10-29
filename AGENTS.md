@@ -17,7 +17,8 @@ src/mailtester_cli/
   commands/
     __init__.py # empty
     _shared.py  # State, client(), handle_errors, confirm, print_json, fmt_int, fail
-    verify.py   # verify, find
+    verify.py   # verify
+    finder.py   # find, find-domain, find-company
     account.py  # credits
     lists.py    # the lists group: the table, lists show, lists delete
     batch.py    # batch submit/upload/status/wait/results
@@ -29,6 +30,7 @@ src/mailtester_cli/
 tests/          # pytest suite, never hits the live API
   conftest.py   # load_fixture / load_request / serve / sent_json / sent_form helpers and the mt fixture
   test_cli_verify_find.py  # verify, find, global --json, error mapping
+  test_cli_finder.py       # find-domain, find-company
   test_cli_account.py      # credits
   test_cli_lists.py        # lists, --page/--per-page/--all, lists show, lists delete
   test_cli_batch.py        # batch submit/upload/status/wait/results, --wait and wait with a fake clock

@@ -12,7 +12,14 @@ from conftest import load_fixture, serve
 
 from mailtester_cli import MailTester
 from mailtester_cli.client import BASE_URL
-from mailtester_cli.models import BatchJob, FinderCandidate, ListJob, ListPage, VerifyResult
+from mailtester_cli.models import (
+    BatchJob,
+    FinderCandidate,
+    ListJob,
+    ListPage,
+    RoleFinderResult,
+    VerifyResult,
+)
 
 
 @pytest.fixture
@@ -116,6 +123,32 @@ def test_find_lists_credits(respx_mock, mt):
         assert isinstance(job.status, str)
 
     assert mt.credits().balance == 5000
+
+
+def test_find_role_mailboxes(respx_mock, mt):
+    route_with(respx_mock, "POST", f"{BASE_URL}/finder/domain", "finder_domain", domain="acme.com")
+    route_with(
+        respx_mock,
+        "POST",
+        f"{BASE_URL}/finder/company",
+        "finder_company",
+        company="Acme Inc",
+        domain="acme.com",
+    )
+
+    roles = mt.find_domain("acme.com")
+    assert isinstance(roles, RoleFinderResult)
+    assert roles.domain == "acme.com"
+    assert roles.emails
+    assert all(isinstance(c, FinderCandidate) for c in roles.emails)
+    assert roles.total == 5
+    assert roles.limit == 10
+    assert len(roles.emails) <= roles.limit
+
+    company = mt.find_company("Acme Inc")
+    assert company.company == "Acme Inc"
+    assert company.domain == "acme.com"
+    assert [c.email for c in company.emails] == [c.email for c in roles.emails]
 
 
 def test_lists_pages_show_delete(respx_mock, mt):
