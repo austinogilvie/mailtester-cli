@@ -1,0 +1,30 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify/batch",
+    "params": {},
+    "json": {
+      "emails": [
+        "alice@example.com"
+      ],
+      "auto_start": false,
+      "callback_url": "nope"
+    }
+  },
+  "status": 422,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "51",
+    "x-ratelimit-reset": "1793285820"
+  },
+  "body": {
+    "success": false,
+    "errors": {
+      "callback_url": [
+        "The callback url field must be a valid URL."
+      ]
+    }
+  },
+  "synthetic": false
+}

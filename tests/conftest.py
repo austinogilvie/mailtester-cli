@@ -1,4 +1,6 @@
 import json
+from email.parser import BytesParser
+from email.policy import default as _email_policy
 from pathlib import Path
 
 import pytest
@@ -43,6 +45,28 @@ def serve(respx_mock, name: str, url: str, method: str = "GET", **patterns):
 def sent_json(route) -> dict:
     """Return the JSON body of the last request a respx route received."""
     return json.loads(route.calls.last.request.content)
+
+
+def sent_form(route) -> tuple[dict[str, str], dict[str, tuple[str, bytes, str]]]:
+    """Return (fields, files) from the multipart body of the last request a route received.
+
+    fields maps each plain form field to its text. files maps each file part to
+    (filename, bytes, content_type).
+    """
+    request = route.calls.last.request
+    header = b"Content-Type: " + request.headers["content-type"].encode() + b"\r\n\r\n"
+    message = BytesParser(policy=_email_policy).parsebytes(header + request.content)
+    fields: dict[str, str] = {}
+    files: dict[str, tuple[str, bytes, str]] = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        payload = part.get_payload(decode=True)
+        filename = part.get_filename()
+        if filename is None:
+            fields[name] = payload.decode()
+        else:
+            files[name] = (filename, payload, part.get_content_type())
+    return fields, files
 
 
 @pytest.fixture

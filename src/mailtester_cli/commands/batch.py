@@ -1,12 +1,13 @@
-"""The `batch` group: submit, status, and results."""
+"""The `batch` group: submit, upload, status, wait, and results."""
 
 import sys
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import typer
 
-from mailtester_cli.client import MAX_BATCH_EMAILS, MailTester
+from mailtester_cli.client import MAX_BATCH_EMAILS, MAX_UPLOAD_BYTES, MailTester
 from mailtester_cli.commands._shared import (
     client,
     error_message,
@@ -16,7 +17,13 @@ from mailtester_cli.commands._shared import (
     handle_errors,
     print_json,
 )
-from mailtester_cli.errors import BatchFailedError, BatchTimeoutError, MailTesterError
+from mailtester_cli.errors import (
+    BatchFailedError,
+    BatchNotStartedError,
+    BatchTimeoutError,
+    MailTesterError,
+    NotFoundError,
+)
 from mailtester_cli.models import BatchJob
 
 CONFIRM_THRESHOLD = 100
@@ -66,6 +73,27 @@ def _read_emails(file: str) -> list[str]:
     return [line for line in (raw.strip() for raw in text.splitlines()) if line]
 
 
+def _count_text_lines(data: bytes) -> int | None:
+    """Count non-blank lines when `data` is UTF-8 text; None for binary files such as XLSX."""
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+    return sum(1 for line in text.splitlines() if line.strip())
+
+
+def _check_callback_url(value: str | None) -> None:
+    """Fail with exit 2 unless `value` is None or an http(s) URL with a host."""
+    if value is None:
+        return
+    try:
+        parts = urlsplit(value)
+    except ValueError:  # for example an unbalanced IPv6 bracket
+        fail("--callback-url must be an http(s) URL.", code=2)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        fail("--callback-url must be an http(s) URL.", code=2)
+
+
 def _confirm(question: str) -> bool:
     # typer.confirm prints the prompt's trailing space to stdout; keep stdout for results only.
     typer.echo(f"{question} [y/N]: ", err=True, nl=False)
@@ -94,11 +122,59 @@ def _write_results(
         print_json([row.raw for row in mt.batch_results(batch_id, filter=filter_.value)])
 
 
+def _wait_and_write(
+    mt: MailTester,
+    batch_id: int,
+    *,
+    timeout: int,
+    filter_: ResultFilter,
+    format_: ResultFormat,
+    resume_hint: str,
+) -> None:
+    """Poll `batch_id` with status lines on stderr, then write its results to stdout.
+
+    `resume_hint` is the sentence appended after an API error while polling, for example
+    `Check it with: mailtester batch status 1457`.
+    """
+    wait_cmd = f"mailtester batch wait {batch_id}"
+    try:
+        mt.wait_for_batch(
+            batch_id,
+            timeout=timeout,
+            on_poll=lambda polled: typer.echo(_status_line(polled), err=True),
+        )
+    except BatchNotStartedError as exc:
+        # Never "run this again": for submit/upload --wait that would pay for a second batch.
+        start = f"Start it in the MailTester app, then resume with: {wait_cmd}"
+        fail(_with_hint(str(exc), start))
+    except BatchTimeoutError as exc:
+        fail(_with_hint(str(exc), f"Resume with: {wait_cmd}"))
+    except (BatchFailedError, NotFoundError):
+        raise
+    except MailTesterError as exc:
+        running = f"Batch {batch_id} may still be running. {resume_hint}"
+        fail(_with_hint(error_message(exc), running))
+    except KeyboardInterrupt:
+        typer.echo(
+            f"Stopped waiting. Batch {batch_id} is still running. Resume with: {wait_cmd}",
+            err=True,
+        )
+        raise typer.Exit(130) from None
+    try:
+        _write_results(mt, batch_id, filter_, format_)
+    except MailTesterError as exc:
+        fetch = f"Batch {batch_id} is complete. Fetch it with: mailtester batch results {batch_id}"
+        fail(_with_hint(error_message(exc), fetch))
+
+
 @batch_app.command()
 def submit(
     ctx: typer.Context,
     file: str = typer.Argument(..., help="File with one address per line, or - for stdin."),
     name: str | None = typer.Option(None, "--name", help="A name for the batch."),
+    callback_url: str | None = typer.Option(
+        None, "--callback-url", help="URL the API calls when the batch completes."
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
     wait: bool = typer.Option(False, "--wait", help="Wait for completion and print results."),
     timeout: int | None = typer.Option(
@@ -111,6 +187,7 @@ def submit(
     format_: ResultFormat | None = WAIT_FORMAT_OPTION,
 ) -> None:
     """Submit addresses for bulk verification. (1 credit per address)"""
+    _check_callback_url(callback_url)
     if not wait and (timeout, filter_, format_) != (None, None, None):
         fail("--timeout, --filter, and --format only apply with --wait.", code=2)
     emails = _read_emails(file)
@@ -129,7 +206,7 @@ def submit(
             raise typer.Exit(1)
 
     with handle_errors(), client() as mt:
-        job = mt.submit_batch(emails, name=name)
+        job = mt.submit_batch(emails, name=name, callback_url=callback_url)
         submitted = f"Submitted batch {job.id} ({fmt_int(job.total_emails)} emails)"
         if not wait:
             if get_state(ctx).json:
@@ -138,32 +215,98 @@ def submit(
                 typer.echo(submitted)
             return
         typer.echo(submitted, err=True)
-        hint = f"mailtester batch status {job.id}"
+        _wait_and_write(
+            mt,
+            job.id,
+            timeout=DEFAULT_WAIT_TIMEOUT if timeout is None else timeout,
+            filter_=filter_ or ResultFilter.all,
+            format_=format_ or ResultFormat.json,
+            resume_hint=f"Check it with: mailtester batch status {job.id}",
+        )
+
+
+@batch_app.command()
+def upload(
+    ctx: typer.Context,
+    file: str = typer.Argument(..., help="CSV, TXT, or XLSX file, sent to the API as is."),
+    name: str | None = typer.Option(None, "--name", help="A name for the batch."),
+    callback_url: str | None = typer.Option(
+        None, "--callback-url", help="URL the API calls when the batch completes."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+    wait: bool = typer.Option(False, "--wait", help="Wait for completion and print results."),
+    timeout: int | None = typer.Option(
+        None,
+        "--timeout",
+        min=0,
+        help=f"With --wait: seconds to wait (default {DEFAULT_WAIT_TIMEOUT}).",
+    ),
+    filter_: ResultFilter | None = WAIT_FILTER_OPTION,
+    format_: ResultFormat | None = WAIT_FORMAT_OPTION,
+) -> None:
+    """Upload a CSV, TXT, or XLSX file. (1 credit per address)"""
+    _check_callback_url(callback_url)
+    if not wait and (timeout, filter_, format_) != (None, None, None):
+        fail("--timeout, --filter, and --format only apply with --wait.", code=2)
+    if file == "-":
+        fail(
+            "batch upload needs a file path, not stdin. "
+            "Pipe addresses to: mailtester batch submit -"
+        )
+    try:
+        size = Path(file).stat().st_size
+    except FileNotFoundError:
+        fail(f"File not found: {file}")
+    except OSError as exc:
+        fail(f"Could not read {file}: {exc.strerror or exc}")
+    if size == 0:
+        fail(f"{file} is empty.")
+    if size > MAX_UPLOAD_BYTES:
+        fail(f"{file} is {size / 1_000_000:.1f} MB; the upload limit is 10 MB.")
+    try:
+        data = Path(file).read_bytes()
+    except OSError as exc:
+        fail(f"Could not read {file}: {exc.strerror or exc}")
+
+    count = _count_text_lines(data)
+    if count is None:
+        typer.echo(
+            f"The address count in {file} isn't known until MailTester reads it. "
+            "This will use 1 credit per address.",
+            err=True,
+        )
+    else:
+        cost = f"{fmt_int(count)} credit{'' if count == 1 else 's'}"
+        typer.echo(f"This will use up to {cost}.", err=True)
+    needs_confirm = (count is None or count >= CONFIRM_THRESHOLD) and not yes
+    if needs_confirm and not _confirm("Continue?"):
+        typer.echo("Aborted.", err=True)
+        raise typer.Exit(1)
+
+    with handle_errors(), client() as mt:
+        # The client checks the file again; it can vanish or change size after the checks above.
         try:
-            mt.wait_for_batch(
-                job.id,
-                timeout=DEFAULT_WAIT_TIMEOUT if timeout is None else timeout,
-                on_poll=lambda polled: typer.echo(_status_line(polled), err=True),
-            )
-        except BatchTimeoutError as exc:
-            fail(f"{exc}. Check later with: {hint}")
-        except BatchFailedError:
-            raise
-        except MailTesterError as exc:
-            # The batch was paid for and may still be running: say how to pick it back up.
-            running = f"Batch {job.id} may still be running. Check it with: {hint}"
-            fail(_with_hint(error_message(exc), running))
-        except KeyboardInterrupt:
-            typer.echo(
-                f"Stopped waiting. Batch {job.id} is still running. Check it with: {hint}",
-                err=True,
-            )
-            raise typer.Exit(130) from None
-        try:
-            _write_results(mt, job.id, filter_ or ResultFilter.all, format_ or ResultFormat.json)
-        except MailTesterError as exc:
-            fetch = f"Batch {job.id} is complete. Fetch it with: mailtester batch results {job.id}"
-            fail(_with_hint(error_message(exc), fetch))
+            job = mt.upload_batch(file, name=name, callback_url=callback_url)
+        except ValueError as exc:
+            fail(str(exc))
+        except OSError as exc:
+            fail(f"Could not read {file}: {exc.strerror or exc}")
+        submitted = f"Submitted batch {job.id} ({fmt_int(job.total_emails)} emails)"
+        if not wait:
+            if get_state(ctx).json:
+                print_json(job.raw)
+            else:
+                typer.echo(submitted)
+            return
+        typer.echo(submitted, err=True)
+        _wait_and_write(
+            mt,
+            job.id,
+            timeout=DEFAULT_WAIT_TIMEOUT if timeout is None else timeout,
+            filter_=filter_ or ResultFilter.all,
+            format_=format_ or ResultFormat.json,
+            resume_hint=f"Check it with: mailtester batch status {job.id}",
+        )
 
 
 @batch_app.command()
@@ -182,6 +325,27 @@ def status(
         typer.echo(
             f"  valid {fmt_int(job.valid_emails)}  invalid {fmt_int(job.invalid_emails)}"
             f"  unknown {fmt_int(job.unknown_emails)}"
+        )
+
+
+@batch_app.command()
+def wait(
+    batch_id: int = typer.Argument(..., metavar="ID", help="Batch id from `batch submit`."),
+    timeout: int = typer.Option(
+        DEFAULT_WAIT_TIMEOUT, "--timeout", min=0, help="Seconds to wait before giving up."
+    ),
+    filter_: ResultFilter = FILTER_OPTION,
+    format_: ResultFormat = FORMAT_OPTION,
+) -> None:
+    """Wait for a batch to complete and print its results."""
+    with handle_errors(), client() as mt:
+        _wait_and_write(
+            mt,
+            batch_id,
+            timeout=timeout,
+            filter_=filter_,
+            format_=format_,
+            resume_hint=f"Resume with: mailtester batch wait {batch_id}",
         )
 
 

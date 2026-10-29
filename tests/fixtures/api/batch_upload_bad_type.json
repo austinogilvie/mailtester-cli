@@ -1,0 +1,27 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify/batch/upload",
+    "params": {},
+    "form": {
+      "auto_start": "0"
+    },
+    "file": "leads.json"
+  },
+  "status": 422,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "52",
+    "x-ratelimit-reset": "1793285820"
+  },
+  "body": {
+    "success": false,
+    "errors": {
+      "file": [
+        "The file field must be a file of type: csv, txt, xlsx, xls."
+      ]
+    }
+  },
+  "synthetic": false
+}

@@ -1,0 +1,28 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/verify/batch/upload",
+    "params": {},
+    "form": {
+      "auto_start": "0"
+    },
+    "file": "leads.xlsx"
+  },
+  "status": 201,
+  "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "50",
+    "x-ratelimit-reset": "1793285820"
+  },
+  "body": {
+    "success": true,
+    "data": {
+      "id": 1497,
+      "status": "pending",
+      "total_emails": 2,
+      "created_at": "2026-10-29T14:56:12+00:00"
+    }
+  },
+  "synthetic": false
+}

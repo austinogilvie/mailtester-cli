@@ -5,6 +5,7 @@ from conftest import load_fixture, load_request, sent_json, serve
 from mailtester_cli.client import BASE_URL
 from mailtester_cli.errors import (
     BatchFailedError,
+    BatchNotStartedError,
     BatchTimeoutError,
     MailTesterError,
     NotFoundError,
@@ -257,6 +258,41 @@ def test_wait_propagates_404_without_retry(respx_mock, mt, clock):
         mt.wait_for_batch(1457)
     assert route.call_count == 1
     assert clock.sleeps == []
+
+
+PENDING_STATUS = f"{BASE_URL}/verify/batch/1492"
+
+
+def test_wait_raises_not_started_on_pending(respx_mock, mt, clock):
+    route = serve(respx_mock, "batch_status_pending", PENDING_STATUS)
+    with pytest.raises(BatchNotStartedError) as info:
+        mt.wait_for_batch(1492)
+    assert isinstance(info.value, MailTesterError)
+    assert str(info.value) == "Batch 1492 is pending and won't start on its own"
+    assert info.value.job.status == "pending"
+    assert info.value.body == info.value.job.raw
+    assert info.value.status_code is None
+    assert route.call_count == 1
+    assert clock.sleeps == []
+
+
+def test_wait_pending_skips_on_poll(respx_mock, mt, clock):
+    serve(respx_mock, "batch_status_pending", PENDING_STATUS)
+    seen: list[BatchJob] = []
+    with pytest.raises(BatchNotStartedError):
+        mt.wait_for_batch(1492, on_poll=seen.append)
+    assert seen == []
+
+
+def test_wait_pending_after_processing(respx_mock, mt, clock):
+    respx_mock.get(PENDING_STATUS).mock(
+        side_effect=[response(PROCESSING, id=1492), response("batch_status_pending")]
+    )
+    seen: list[BatchJob] = []
+    with pytest.raises(BatchNotStartedError):
+        mt.wait_for_batch(1492, on_poll=seen.append)
+    assert clock.sleeps == [3.0]
+    assert [job.status for job in seen] == ["processing"]
 
 
 # batch_results
