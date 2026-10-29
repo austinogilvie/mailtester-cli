@@ -111,14 +111,18 @@ def _resolve_key(api_key: str | None) -> str:
     return key
 
 
-def _parse(build: Callable[[Any], T], data: Any) -> T:
-    """Build a model from `data`, turning a shape mismatch into a MailTesterError."""
+def _parse(build: Callable[[Any], T], data: Any, *, body: dict | None = None) -> T:
+    """Build a model from `data`, turning a shape mismatch into a MailTesterError.
+
+    The error carries `body` when given (for builders fed a whole envelope), else `{"data": data}`.
+    """
     try:
         return build(data)
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         detail = f"missing {exc}" if isinstance(exc, KeyError) else str(exc)
         raise MailTesterError(
-            f"Unexpected response from MailTester: {detail}", body={"data": data}
+            f"Unexpected response from MailTester: {detail}",
+            body=body if body is not None else {"data": data},
         ) from exc
 
 
@@ -271,7 +275,7 @@ class MailTester:
         if per_page is not None:
             params["per_page"] = per_page
         body = self._body("GET", "/lists", params=params or None)
-        return _parse(ListPage.from_body, body)
+        return _parse(ListPage.from_body, body, body=body)
 
     def lists(self, *, page: int | None = None, per_page: int | None = None) -> list[ListJob]:
         """Return one page of verification lists, the first by default."""
@@ -298,8 +302,14 @@ class MailTester:
         """Delete a list and its results. Returns the API's message, `"List deleted"`, or `""`.
 
         Raises NotFoundError for an unknown id and ConflictError while the list is processing.
+        Any 2xx counts as deleted, even a 204 or a body that isn't JSON.
         """
-        message = self._body("DELETE", f"/lists/{list_id}").get("message")
+        response = self._request("DELETE", f"/lists/{list_id}")
+        try:
+            body = _json_object(response)
+        except MailTesterError:
+            return ""
+        message = body.get("message")
         return message if isinstance(message, str) else ""
 
     def credits(self) -> Credits:

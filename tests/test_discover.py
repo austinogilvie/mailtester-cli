@@ -560,12 +560,13 @@ def test_spend_with_only_a_no_start_batch_is_an_error():
 
 
 @respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
-def test_list_pages_fall_back_without_meta(respx_mock, monkeypatch, tmp_path):
+def test_list_pages_skipped_without_meta(respx_mock, monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(discover, "load_dotenv", lambda: None)
     monkeypatch.setenv("MAILTESTER_API_KEY", "evp_realkey123")
     free_routes(respx_mock)  # its /lists body has no meta
 
     assert discover.main(["--out", str(tmp_path)]) == 0
 
-    past = json.loads((tmp_path / "lists_past_last_page.json").read_text())
-    assert past["request"]["params"] == {"per_page": 1, "page": 2}
+    assert not (tmp_path / "lists_page_2.json").exists()
+    assert not (tmp_path / "lists_past_last_page.json").exists()
+    assert "[ 2b] skipped lists_past_last_page: step 2 had no meta.total" in capsys.readouterr().out

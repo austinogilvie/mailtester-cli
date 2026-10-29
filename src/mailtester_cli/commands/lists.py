@@ -14,7 +14,7 @@ from mailtester_cli.commands._shared import (
     handle_errors,
     print_json,
 )
-from mailtester_cli.errors import MailTesterError
+from mailtester_cli.errors import ConflictError, NotFoundError
 from mailtester_cli.models import ListJob, ListPage
 
 ALL_PER_PAGE = 100  # --all without --per-page: the fewest requests the API allows
@@ -173,7 +173,9 @@ def delete(
         for list_id in ids:
             try:
                 mt.delete_list(list_id)
-            except MailTesterError as exc:
+            except (NotFoundError, ConflictError) as exc:
+                # Only errors about this one id: anything else (429, 401, 5xx, ...) would hit
+                # every remaining id too, so it propagates to handle_errors and stops the loop.
                 prefix = f"List {list_id}: " if len(ids) > 1 else ""
                 typer.echo(f"Error: {prefix}{error_message(exc)}", err=True)
                 failed = True

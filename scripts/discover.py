@@ -414,21 +414,28 @@ def run_batch_reads(rec: Recorder, args: argparse.Namespace, batch_id: int | str
     rec.call("9", "lists_after_batch", "GET", "/lists", params=params, scrub_names=True)
 
 
-def _meta_total(resp: httpx.Response) -> int:
+def _meta_total(resp: httpx.Response) -> int | None:
+    """`meta.total` from a paginated body, or None when it can't be read."""
     try:
         return int(resp.json()["meta"]["total"])
     except (ValueError, KeyError, TypeError):
-        return 1
+        return None
 
 
 def run_list_pages(rec: Recorder, lists_resp: httpx.Response) -> None:
     """Step 2b: one list per page, so page 2 holds a row and the page after the last is empty.
 
-    Page 2 only has a row when the account holds at least two lists.
+    Page 2 only has a row when the account holds at least two lists. Both fixtures depend on
+    step 2's `meta.total`, so when it's missing the step is skipped rather than guessed: a
+    guessed page could be a real one saved under the past-the-end name.
     """
+    total = _meta_total(lists_resp)
+    if total is None:
+        print("[ 2b] skipped lists_past_last_page: step 2 had no meta.total")
+        return
     params = {"per_page": 1, "page": 2}
     rec.call("2b", "lists_page_2", "GET", "/lists", params=params, scrub_names=True)
-    params = {"per_page": 1, "page": max(_meta_total(lists_resp), 1) + 1}
+    params = {"per_page": 1, "page": max(total, 1) + 1}
     rec.call("2b", "lists_past_last_page", "GET", "/lists", params=params, scrub_names=True)
 
 

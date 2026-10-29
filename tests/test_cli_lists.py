@@ -439,6 +439,33 @@ def test_delete_single_failure_has_no_prefix(respx_mock, api_key):
     assert result.stderr == (f"Error: {load_fixture('error_409_list_processing')[2]['error']}\n")
 
 
+def test_delete_stops_on_rate_limit(respx_mock, api_key):
+    serve(respx_mock, "error_429", delete_url(1492), method="DELETE")
+    second = serve_deleted(respx_mock, 1493)
+    result = runner.invoke(app, ["lists", "delete", "1492", "1493", "--yes"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == f"Error: {load_fixture('error_429')[2]['error']}. Retry in 30s.\n"
+    assert second.call_count == 0
+
+
+def test_delete_stops_on_bad_key(respx_mock, api_key):
+    serve(respx_mock, "error_401", delete_url(1492), method="DELETE")
+    second = serve_deleted(respx_mock, 1493)
+    result = runner.invoke(app, ["lists", "delete", "1492", "1493", "--yes"])
+    assert result.exit_code == 1
+    assert result.stderr.startswith("Error: ")
+    assert second.call_count == 0
+
+
+def test_delete_success_then_rate_limit_keeps_earlier_output(respx_mock, api_key):
+    serve_deleted(respx_mock, 1492)
+    serve(respx_mock, "error_429", delete_url(1493), method="DELETE")
+    result = runner.invoke(app, ["lists", "delete", "1492", "1493", "--yes"])
+    assert result.exit_code == 1
+    assert result.stdout == "Deleted list 1492\n"
+
+
 def test_delete_dedupes_ids(respx_mock, api_key):
     route = serve(respx_mock, "list_delete", delete_url(1492), method="DELETE")
     result = runner.invoke(app, ["lists", "delete", "1492", "1492"], input="y\n")

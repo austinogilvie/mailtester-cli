@@ -173,6 +173,7 @@ def test_lists_page_without_meta_raises(respx_mock, mt):
     with pytest.raises(MailTesterError) as info:
         mt.lists_page()
     assert str(info.value) == "Unexpected response from MailTester: missing 'meta'"
+    assert info.value.body == {"success": True, "data": []}
 
 
 def test_lists_past_last_page(respx_mock, mt):
@@ -296,6 +297,16 @@ def test_delete_list_returns_message(respx_mock, mt):
 
 def test_delete_list_without_message_returns_empty(respx_mock, mt):
     respx_mock.delete(f"{LISTS}/1492").respond(200, json={"success": True})
+    assert mt.delete_list(1492) == ""
+
+
+def test_delete_list_no_content_is_success(respx_mock, mt):
+    respx_mock.delete(f"{LISTS}/1492").respond(204)
+    assert mt.delete_list(1492) == ""
+
+
+def test_delete_list_non_json_body_is_success(respx_mock, mt):
+    respx_mock.delete(f"{LISTS}/1492").respond(200, text="ok")
     assert mt.delete_list(1492) == ""
 
 
