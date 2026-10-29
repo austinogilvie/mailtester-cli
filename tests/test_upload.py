@@ -81,7 +81,9 @@ def test_upload_batch_accepts_pathlike(respx_mock, mt, tmp_path):
     ("name", "data", "content_type"),
     [
         ("leads.txt", b"a@example.com\n", "text/plain"),
+        ("leads.xls", XLSX_HEAD, "application/vnd.ms-excel"),
         ("leads.xlsx", XLSX_HEAD, XLSX_TYPE),
+        ("LEADS.XLSX", XLSX_HEAD, XLSX_TYPE),
     ],
 )
 def test_upload_batch_txt_and_xlsx_content_types(
@@ -90,6 +92,14 @@ def test_upload_batch_txt_and_xlsx_content_types(
     route = serve(respx_mock, "batch_upload_xlsx_pending", UPLOAD, method="POST")
     mt.upload_batch(write(tmp_path, name, data), auto_start=False)
     assert sent_form(route) == ({"auto_start": "0"}, {"file": (name, data, content_type)})
+
+
+def test_upload_batch_unknown_suffix_is_octet_stream(respx_mock, mt, tmp_path):
+    # The content type comes from our own map, not the host's mime database.
+    route = serve(respx_mock, "batch_upload_bad_type", UPLOAD, method="POST")
+    with pytest.raises(ValidationError):
+        mt.upload_batch(write(tmp_path, "leads.dat", CSV), auto_start=False)
+    assert sent_form(route)[1]["file"] == ("leads.dat", CSV, "application/octet-stream")
 
 
 def test_upload_batch_rejects_empty_file_without_request(respx_mock, mt, tmp_path):

@@ -158,7 +158,14 @@ def test_submit_callback_url_uppercase_scheme(respx_mock, api_key, tmp_path):
 
 @pytest.mark.parametrize(
     "url",
-    ["nope", "ftp://hooks.example.com/mt", "mailto:ops@example.com", "https://", "http:///path"],
+    [
+        "nope",
+        "ftp://hooks.example.com/mt",
+        "mailto:ops@example.com",
+        "https://",
+        "http:///path",
+        "http://[::1",  # urlsplit raises ValueError on an unbalanced IPv6 bracket
+    ],
 )
 def test_submit_callback_url_rejects_non_http(respx_mock, guard, api_key, tmp_path, url):
     path = write_emails(tmp_path, EMAILS)
@@ -645,10 +652,24 @@ def test_wait_command_pending_fails_fast(respx_mock, api_key, clock):
     assert result.stdout == ""
     assert result.stderr == (
         "Error: Batch 1492 is pending and won't start on its own. "
-        "Start it in the MailTester app, then run this again.\n"
+        "Start it in the MailTester app, then resume with: mailtester batch wait 1492\n"
     )
     assert route.call_count == 1
     assert clock.sleeps == []
+
+
+def test_submit_wait_pending_hint_does_not_say_run_again(respx_mock, api_key, tmp_path, clock):
+    # "Run this again" would submit (and pay for) a second batch.
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    serve(respx_mock, "batch_status_pending", STATUS)
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, EMAILS), "--wait"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.splitlines()[-1] == (
+        "Error: Batch 1492 is pending and won't start on its own. "
+        "Start it in the MailTester app, then resume with: mailtester batch wait 1457"
+    )
+    assert "run this again" not in result.stderr
 
 
 def test_wait_command_timeout(respx_mock, api_key, clock):
@@ -917,12 +938,46 @@ def test_upload_empty_file(respx_mock, guard, api_key, tmp_path):
 
 def test_upload_oversize_file(respx_mock, guard, api_key, tmp_path):
     path = tmp_path / "leads.csv"
-    with open(path, "wb") as fh:
-        fh.seek(MAX_UPLOAD_BYTES)
+    with open(path, "wb") as fh:  # sparse: 12.3 MB, well past the decimal 10 MB limit
+        fh.seek(12_300_000 - 1)
         fh.write(b"x")
+    assert path.stat().st_size > MAX_UPLOAD_BYTES
     result = runner.invoke(app, ["batch", "upload", str(path)])
     assert result.exit_code == 1
-    assert result.stderr == f"Error: {path} is 10.5 MB; the upload limit is 10 MB.\n"
+    assert result.stderr == f"Error: {path} is 12.3 MB; the upload limit is 10 MB.\n"
+    assert not guard.called
+
+
+def test_upload_client_value_error_fails_cleanly(respx_mock, guard, api_key, tmp_path, monkeypatch):
+    # The file can change between the command's checks and the client's own.
+    def raise_value_error(self, path, **kwargs):
+        raise ValueError("leads.csv is empty")
+
+    monkeypatch.setattr(MailTester, "upload_batch", raise_value_error)
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.splitlines() == [
+        "This will use up to 3 credits.",
+        "Error: leads.csv is empty",
+    ]
+    assert "Traceback" not in result.stderr + result.stdout
+    assert not guard.called
+
+
+def test_upload_client_os_error_fails_cleanly(respx_mock, guard, api_key, tmp_path, monkeypatch):
+    def raise_os_error(self, path, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", str(path))
+
+    monkeypatch.setattr(MailTester, "upload_batch", raise_os_error)
+    path = write_file(tmp_path, "leads.csv", CSV_BYTES)
+    result = runner.invoke(app, ["batch", "upload", path])
+    assert result.exit_code == 1
+    assert result.stderr.splitlines()[-1] == (
+        f"Error: Could not read {path}: No such file or directory"
+    )
+    assert "Traceback" not in result.stderr + result.stdout
     assert not guard.called
 
 

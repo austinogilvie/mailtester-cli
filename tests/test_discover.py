@@ -270,16 +270,52 @@ def test_upload_fixture_name(name, no_start, status, expected):
     assert discover._upload_name(Path(name), no_start, status) == expected
 
 
-def test_upload_cost_counts_non_blank_lines_or_one_for_binary(tmp_path):
+def test_upload_cost_counts_non_blank_lines_or_none_for_binary(tmp_path):
     csv = tmp_path / "leads.csv"
     csv.write_text("name,email\n\njane@example.com\n   \njohn@example.com\n")
     xlsx = tmp_path / "leads.xlsx"
     xlsx.write_bytes(XLSX_HEAD)
     assert discover.upload_count(csv) == 3
-    assert discover.upload_count(xlsx) == 1
+    assert discover.upload_count(xlsx) is None
     assert discover.planned_cost(discover.parse_args(["--upload", str(csv)])) == 3
-    assert discover.planned_cost(discover.parse_args(["--upload", str(xlsx)])) == 1
+    assert discover.planned_cost(discover.parse_args(["--upload", str(xlsx)])) == 0
     assert discover.planned_cost(discover.parse_args(["--upload", str(csv), "--no-start"])) == 0
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_refuses_started_binary_upload_up_front(respx_mock, monkeypatch, tmp_path, capsys):
+    # A binary file can't be counted locally, so --spend can't vouch for its cost.
+    monkeypatch.setattr(discover, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_realkey123")
+    anything = respx_mock.route().respond(500)
+    xlsx = tmp_path / "leads.xlsx"
+    xlsx.write_bytes(XLSX_HEAD)
+
+    assert discover.main(["--spend", "--upload", str(xlsx), "--out", str(tmp_path)]) == 2
+
+    err = capsys.readouterr().err
+    assert "can't be counted locally" in err
+    assert "--no-start" in err
+    assert not anything.called
+    assert list(tmp_path.iterdir()) == [xlsx]
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_binary_upload_with_no_start_is_still_allowed(respx_mock, monkeypatch, tmp_path):
+    monkeypatch.setattr(discover, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_realkey123")
+    free_routes(respx_mock)
+    upload = respx_mock.post("/verify/batch/upload").respond(
+        201, json=upload_body(id=1497, status="pending")
+    )
+    respx_mock.delete("/lists/1497").respond(200, json={"success": True})
+    xlsx = tmp_path / "leads.xlsx"
+    xlsx.write_bytes(XLSX_HEAD)
+
+    assert discover.main(["--upload", str(xlsx), "--no-start", "--out", str(tmp_path)]) == 0
+
+    assert upload.called
+    assert b'name="auto_start"\r\n\r\n0' in upload.calls.last.request.content
 
 
 def test_started_upload_requires_spend(tmp_path, capsys):

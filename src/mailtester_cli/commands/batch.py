@@ -86,7 +86,10 @@ def _check_callback_url(value: str | None) -> None:
     """Fail with exit 2 unless `value` is None or an http(s) URL with a host."""
     if value is None:
         return
-    parts = urlsplit(value)
+    try:
+        parts = urlsplit(value)
+    except ValueError:  # for example an unbalanced IPv6 bracket
+        fail("--callback-url must be an http(s) URL.", code=2)
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         fail("--callback-url must be an http(s) URL.", code=2)
 
@@ -141,7 +144,9 @@ def _wait_and_write(
             on_poll=lambda polled: typer.echo(_status_line(polled), err=True),
         )
     except BatchNotStartedError as exc:
-        fail(_with_hint(str(exc), "Start it in the MailTester app, then run this again."))
+        # Never "run this again": for submit/upload --wait that would pay for a second batch.
+        start = f"Start it in the MailTester app, then resume with: {wait_cmd}"
+        fail(_with_hint(str(exc), start))
     except BatchTimeoutError as exc:
         fail(_with_hint(str(exc), f"Resume with: {wait_cmd}"))
     except (BatchFailedError, NotFoundError):
@@ -279,7 +284,13 @@ def upload(
         raise typer.Exit(1)
 
     with handle_errors(), client() as mt:
-        job = mt.upload_batch(file, name=name, callback_url=callback_url)
+        # The client checks the file again; it can vanish or change size after the checks above.
+        try:
+            job = mt.upload_batch(file, name=name, callback_url=callback_url)
+        except ValueError as exc:
+            fail(str(exc))
+        except OSError as exc:
+            fail(f"Could not read {file}: {exc.strerror or exc}")
         submitted = f"Submitted batch {job.id} ({fmt_int(job.total_emails)} emails)"
         if not wait:
             if get_state(ctx).json:

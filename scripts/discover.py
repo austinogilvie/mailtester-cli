@@ -16,6 +16,8 @@ only for redaction and nothing is submitted.
 
     uv run python scripts/discover.py --upload leads.csv --no-start
 
+An XLSX file can't be counted locally, so a started upload of one is refused: use --no-start.
+
 Real addresses, names, and domains are replaced with placeholders before anything is
 written. The API key is never written or printed.
 """
@@ -458,10 +460,10 @@ def _upload_lines(path: Path) -> list[str] | None:
     return [line for line in text.splitlines() if line.strip()]
 
 
-def upload_count(path: Path) -> int:
-    """Rows an upload may be charged for: its non-blank lines, or 1 when we can't count."""
+def upload_count(path: Path) -> int | None:
+    """Rows an upload may be charged for: its non-blank lines, or None when we can't count."""
     lines = _upload_lines(path)
-    return len(lines) if lines is not None else 1
+    return len(lines) if lines is not None else None
 
 
 def planned_cost(args: argparse.Namespace) -> int:
@@ -470,7 +472,8 @@ def planned_cost(args: argparse.Namespace) -> int:
     if args.batch and not args.batch_id:
         cost += len(args.batch)
     if args.upload and not args.no_start:
-        cost += upload_count(args.upload)
+        # A binary file has no local count; main refuses to start one before anything is sent.
+        cost += upload_count(args.upload) or 0
     return cost
 
 
@@ -520,6 +523,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.upload and not args.upload.is_file():
         print(f"--upload: {args.upload} is not a file.", file=sys.stderr)
         return 2
+    if args.upload and not args.no_start and upload_count(args.upload) is None:
+        print(
+            f"--upload {args.upload} can't be counted locally; "
+            "pass --no-start (pending, free) or use a CSV/TXT file.",
+            file=sys.stderr,
+        )
+        return 2
     cost = planned_cost(args)
     if cost and not args.spend:
         print(f"Refusing: these inputs would spend {cost} credits. Add --spend.", file=sys.stderr)
@@ -530,7 +540,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.batch and len(args.batch) > 3:
         print("--batch takes at most 3 emails.", file=sys.stderr)
         return 2
-    if args.upload and not args.no_start and upload_count(args.upload) > 3:
+    if args.upload and not args.no_start and (upload_count(args.upload) or 0) > 3:
         print("--upload takes at most 3 lines unless --no-start is given.", file=sys.stderr)
         return 2
 

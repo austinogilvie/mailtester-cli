@@ -30,7 +30,15 @@ from mailtester_cli.models import BatchJob, Credits, FinderResult, ListJob, Veri
 BASE_URL = "https://app.mailtester.com/api/v1"
 ENV_VAR = "MAILTESTER_API_KEY"
 MAX_BATCH_EMAILS = 10_000
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # the docs say "max 10 MB" without a unit
+# the docs say "max 10 MB"; decimal, so the message and the check agree
+MAX_UPLOAD_BYTES = 10_000_000
+# Python's built-in mimetypes map has no .xlsx entry, so don't let httpx guess from the name.
+_UPLOAD_CONTENT_TYPES = {
+    ".csv": "text/csv",
+    ".txt": "text/plain",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
 # Assumed names: only "pending" (auto_start=false), "processing", and "completed" have been
 # observed. A "pending" batch never starts on its own, so wait_for_batch raises
 # BatchNotStartedError on it instead of timing out.
@@ -283,12 +291,13 @@ class MailTester:
             form["callback_url"] = callback_url
         if auto_start is not None:
             form["auto_start"] = "1" if auto_start else "0"
+        content_type = _UPLOAD_CONTENT_TYPES.get(file.suffix.lower(), "application/octet-stream")
         with file.open("rb") as fh:
             data = self._data(
                 "POST",
                 "/verify/batch/upload",
                 data=form or None,
-                files={"file": (file.name, fh)},
+                files={"file": (file.name, fh, content_type)},
             )
         return _parse(BatchJob.from_dict, data)
 
