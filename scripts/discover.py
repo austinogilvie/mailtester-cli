@@ -22,6 +22,17 @@ A --no-start batch is free, and recording it also captures GET /lists/{id} and D
 
 An XLSX file can't be counted locally, so a started upload of one is refused: use --no-start.
 
+The role-mailbox finders (015) take one input each. The empty-body probes that name their
+request fields run with the free steps; the five paid steps cost 3 each at most:
+
+    uv run python scripts/discover.py --spend \\
+        --find-domain company.com --find-company "Company Inc" \\
+        --find-company-missing "Zxqv Nonexistent Holdings" \\
+        --find-domain-catchall catchall.com --find-domain-nomx nonexistent-domain-x7q2.invalid
+
+The balance is read after each finder call. A first call that costs more than 3 skips the
+catch-all step, and the run stops before any call that could push the spend past the plan.
+
 Real addresses, names, and domains are replaced with placeholders before anything is
 written. The API key is never written or printed.
 """
@@ -53,6 +64,10 @@ PLACEHOLDER_DOMAINS = ("example.com", "example.net", "example.org")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "canceled", "error"}
 VERIFY_COST, FIND_COST = 1, 3
+# Request field per role finder, until the free probe says otherwise (015 U1).
+FINDER_FIELDS = {"domain": "domain", "company": "company"}
+# Statuses a no-match finder step may answer with and still count as recorded, not failed.
+NO_MATCH_STATUSES = (404, 422)
 
 
 class Stop(Exception):
@@ -281,11 +296,166 @@ def _data(resp: httpx.Response) -> Any:
         return None
 
 
-def run_paid(rec: Recorder, args: argparse.Namespace) -> int | None:
-    def expect_ok(step: str, resp: httpx.Response) -> None:
-        if not resp.is_success:
-            raise Stop(f"step {step} returned {resp.status_code}; not running further paid steps")
+def expect_ok(step: str, resp: httpx.Response, *, allow: tuple[int, ...] = ()) -> None:
+    """Raise Stop unless the response is 2xx or one of the statuses `allow` lists."""
+    if not resp.is_success and resp.status_code not in allow:
+        raise Stop(f"step {step} returned {resp.status_code}; not running further paid steps")
 
+
+def _required_field(resp: httpx.Response, default: str) -> str:
+    """The one field a 422 probe's `errors` map names, or `default` when it says anything else."""
+    try:
+        keys = list(resp.json()["errors"])
+    except (ValueError, KeyError, TypeError):
+        return default
+    if len(keys) == 1 and isinstance(keys[0], str):
+        return keys[0]
+    return default
+
+
+def run_finder_probes(rec: Recorder) -> dict[str, str]:
+    """Steps 4dp and 4cp: empty POSTs to the role finders. Free, and the 422 names the fields.
+
+    Returns the request field each finder requires, read from the probe when it answers with a
+    one-key `errors` map and FINDER_FIELDS otherwise. A status other than 422 is recorded and
+    printed, not fatal: nothing was sent, so nothing can have been charged.
+    """
+    fields = dict(FINDER_FIELDS)
+    for kind, step in (("domain", "4dp"), ("company", "4cp")):
+        resp = rec.call(step, f"finder_{kind}_422", "POST", f"/finder/{kind}", json_body={})
+        if resp.status_code != 422:
+            print(f"[{step:>3}] expected 422 from an empty body, got {resp.status_code}")
+        fields[kind] = _required_field(resp, fields[kind])
+        if fields[kind] != FINDER_FIELDS[kind]:
+            print(f"[{step:>3}] /finder/{kind} takes `{fields[kind]}`, not `{FINDER_FIELDS[kind]}`")
+    return fields
+
+
+def _redactable(domain: object) -> bool:
+    """False for an empty value or a reserved `.invalid` name, which has nothing to hide."""
+    return isinstance(domain, str) and bool(domain) and not domain.lower().endswith(".invalid")
+
+
+def _register_domains(redactor: Redactor, data: Any) -> None:
+    """Register every `domain` value in a response, so a domain we never sent is redacted too."""
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key == "domain" and _redactable(value):
+                redactor.domain(value)
+            else:
+                _register_domains(redactor, value)
+    elif isinstance(data, list):
+        for value in data:
+            _register_domains(redactor, value)
+
+
+def finder_call(rec: Recorder, step: str, name: str, path: str, body: dict) -> httpx.Response:
+    """POST to a finder and save the response, registering any resolved domain before saving."""
+    resp = rec.client.post(path, json=body)
+    _register_domains(rec.redactor, _data(resp))
+    rec.save(step, name, resp, json_body=body)
+    return resp
+
+
+class Budget:
+    """Reads the balance after each paid finder step and stops before the plan is exceeded.
+
+    `unit` is what one finder call costs: FIND_COST until the first paid step shows more.
+    Without a readable balance nothing is checked and the planned_cost gate is the only guard.
+    """
+
+    def __init__(self, rec: Recorder, cap: int) -> None:
+        self.rec = rec
+        self.cap = cap
+        self.unit = FIND_COST
+        self.spent = 0
+        self.before = self.balance()
+
+    def balance(self) -> int | None:
+        data = _data(self.rec.client.get("/credits"))
+        value = data.get("balance") if isinstance(data, dict) else None
+        return value if isinstance(value, int) else None
+
+    def allow(self, step: str) -> None:
+        """Raise Stop when the next call could push the spend past the plan."""
+        if self.spent + self.unit > self.cap:
+            raise Stop(f"step {step} could cost {self.unit} and push the spend past {self.cap}")
+
+    def check(self, step: str) -> int:
+        """Print the balance after `step` and return that step's cost. Raises Stop above the cap."""
+        now = self.balance()
+        if self.before is None or now is None:
+            print(f"[{step:>3}] GET /credits -> balance unknown; the cost isn't checked")
+            return FIND_COST
+        cost, self.spent = self.before - now - self.spent, self.before - now
+        print(f"[{step:>3}] GET /credits -> balance {now} (step {cost}, run total {self.spent})")
+        if self.spent > self.cap:
+            raise Stop(f"spent {self.spent} credits, more than the {self.cap} planned")
+        return cost
+
+
+def finder_cost(args: argparse.Namespace) -> int:
+    """Credits the role-finder flags can spend: FIND_COST each, the no-match ones included."""
+    flags = (
+        args.find_domain,
+        args.find_company,
+        args.find_company_missing,
+        args.find_domain_catchall,
+        args.find_domain_nomx,
+    )
+    return FIND_COST * sum(bool(flag) for flag in flags)
+
+
+def run_finders(rec: Recorder, args: argparse.Namespace, fields: dict[str, str]) -> None:
+    """Steps 4d-4dn: the role-mailbox finders, in the 015 order, with a balance read after each.
+
+    4d (domain) and 4c (company) must succeed. 4cm (made-up company) and 4dn (no-MX domain) are
+    the no-match cases, so a 404 or 422 there is a fixture, not a failure. 4dc (catch-all) is
+    skipped when 4d cost more than FIND_COST, because a per-mailbox price makes it open-ended.
+    """
+    cap = finder_cost(args)
+    if not cap:
+        return
+    budget = Budget(rec, cap)
+    per_mailbox = False
+    if args.find_domain:
+        body = {fields["domain"]: args.find_domain}
+        expect_ok("4d", finder_call(rec, "4d", "finder_domain", "/finder/domain", body))
+        cost = budget.check("4d")
+        if cost > FIND_COST:
+            print(f"[ 4d] cost {cost}, not {FIND_COST}: per-mailbox pricing? skipping step 4dc")
+            per_mailbox = True
+            budget.unit = cost
+    if args.find_company:
+        budget.allow("4c")
+        body = {fields["company"]: args.find_company}
+        expect_ok("4c", finder_call(rec, "4c", "finder_company", "/finder/company", body))
+        budget.check("4c")
+    if args.find_company_missing:
+        budget.allow("4cm")
+        body = {fields["company"]: args.find_company_missing}
+        resp = finder_call(rec, "4cm", "finder_company_missing", "/finder/company", body)
+        expect_ok("4cm", resp, allow=NO_MATCH_STATUSES)
+        budget.check("4cm")
+    if args.find_domain_catchall and per_mailbox:
+        print("[4dc] skipped finder_domain_catch_all: step 4d showed a per-mailbox cost")
+    elif args.find_domain_catchall:
+        budget.allow("4dc")
+        body = {fields["domain"]: args.find_domain_catchall}
+        resp = finder_call(rec, "4dc", "finder_domain_catch_all", "/finder/domain", body)
+        expect_ok("4dc", resp)
+        budget.check("4dc")
+    if args.find_domain_nomx:
+        budget.allow("4dn")
+        body = {fields["domain"]: args.find_domain_nomx}
+        resp = finder_call(rec, "4dn", "finder_domain_no_mx", "/finder/domain", body)
+        expect_ok("4dn", resp, allow=NO_MATCH_STATUSES)
+        budget.check("4dn")
+
+
+def run_paid(
+    rec: Recorder, args: argparse.Namespace, fields: dict[str, str] | None = None
+) -> int | None:
     if args.verify_email:
         body = {"email": args.verify_email, "smtp_check": True}
         expect_ok("3", rec.call("3", "verify_single", "POST", "/verify", json_body=body))
@@ -297,8 +467,8 @@ def run_paid(rec: Recorder, args: argparse.Namespace) -> int | None:
         first, last, domain = args.find_missing
         body = {"first_name": first, "last_name": last, "domain": domain}
         resp = rec.call("4b", "finder_email_missing", "POST", "/finder/email", json_body=body)
-        if not resp.is_success and resp.status_code != 404:
-            expect_ok("4b", resp)
+        expect_ok("4b", resp, allow=(404,))
+    run_finders(rec, args, fields or FINDER_FIELDS)
     batch_id = None
     if args.batch and not args.batch_id:
         body = {"emails": args.batch, "name": "discovery", "auto_start": not args.no_start}
@@ -462,6 +632,15 @@ def build_redactor(args: argparse.Namespace, key: str) -> Redactor:
         r.domain(domain)
         r.name(first, "Nobody")
         r.name(last, "Missing")
+    # Role finders: example.com (or the next free placeholder), then .net, then .org. A reserved
+    # `.invalid` name (the no-MX input) is kept as it is, like 012's finder_no_mx fixture.
+    for domain in (args.find_domain, args.find_domain_catchall, args.find_domain_nomx):
+        if _redactable(domain):
+            r.domain(domain)
+    if args.find_company:
+        r.name(args.find_company, "Acme")
+    if args.find_company_missing:
+        r.name(args.find_company_missing, "Nowhere")
     if args.verify_email:
         r.email(args.verify_email, "verify")
     for i, email in enumerate(args.batch or [], 1):
@@ -499,6 +678,7 @@ def upload_count(path: Path) -> int | None:
 def planned_cost(args: argparse.Namespace) -> int:
     cost = VERIFY_COST if args.verify_email else 0
     cost += FIND_COST * (bool(args.find) + bool(args.find_missing))
+    cost += finder_cost(args)
     if args.batch and not args.batch_id and not args.no_start:
         cost += len(args.batch)
     if args.upload and not args.no_start:
@@ -519,6 +699,23 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         nargs=3,
         metavar=("FIRST", "LAST", "DOMAIN"),
         help="optional step 4b, a made-up person (up to 3 credits)",
+    )
+    p.add_argument("--find-domain", metavar="DOMAIN", help="step 4d, role mailboxes (3 credits)")
+    p.add_argument("--find-company", metavar="NAME", help="step 4c, a company by name (3 credits)")
+    p.add_argument(
+        "--find-company-missing",
+        metavar="NAME",
+        help="step 4cm, a made-up company name (up to 3 credits)",
+    )
+    p.add_argument(
+        "--find-domain-catchall",
+        metavar="DOMAIN",
+        help="step 4dc, a catch-all domain (3 credits; skipped if 4d cost more)",
+    )
+    p.add_argument(
+        "--find-domain-nomx",
+        metavar="DOMAIN",
+        help="step 4dn, a domain with no MX records (up to 3 credits)",
     )
     p.add_argument("--batch", nargs="+", metavar="EMAIL", help="step 5, 1-3 emails (1 credit each)")
     p.add_argument("--batch-id", help="read an existing batch instead of submitting one")
@@ -591,10 +788,11 @@ def main(argv: list[str] | None = None) -> int:
         params = {"per_page": 5}
         lists_resp = rec.call("2", "lists", "GET", "/lists", params=params, scrub_names=True)
         run_list_pages(rec, lists_resp)
+        fields = run_finder_probes(rec)
         batch_id = args.batch_id
         try:
             if cost or args.upload or (args.batch and args.no_start):
-                batch_id = run_paid(rec, args) or batch_id
+                batch_id = run_paid(rec, args, fields) or batch_id
         except Stop as e:
             stopped = str(e)
         if batch_id and not stopped:

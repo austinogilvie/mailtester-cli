@@ -126,6 +126,7 @@ def test_free_run_writes_redacted_fixtures(respx_mock, monkeypatch, tmp_path):
     respx_mock.post("/verify/batch").respond(
         422, json={"success": False, "errors": {"emails": ["The emails field is required."]}}
     )
+    probe_routes(respx_mock)
 
     assert discover.main(["--out", str(tmp_path)]) == 0
 
@@ -136,10 +137,16 @@ def test_free_run_writes_redacted_fixtures(respx_mock, monkeypatch, tmp_path):
         "error_404.json",
         "error_404_list.json",
         "error_422.json",
+        "finder_company_422.json",
+        "finder_domain_422.json",
         "lists.json",
         "lists_page_2.json",
         "lists_past_last_page.json",
     ]
+    probe = json.loads((tmp_path / "finder_domain_422.json").read_text())
+    assert probe["status"] == 422
+    assert probe["request"]["json"] == {} and probe["request"]["path"] == "/finder/domain"
+    assert probe["body"]["errors"] == {"domain": ["The domain field is required."]}
     page_2 = json.loads((tmp_path / "lists_page_2.json").read_text())
     assert page_2["request"]["params"] == {"per_page": 1, "page": 2}
     past = json.loads((tmp_path / "lists_past_last_page.json").read_text())
@@ -174,6 +181,7 @@ def test_paid_step_failure_stops_further_spending(respx_mock, monkeypatch, tmp_p
         404, json={"success": False, "error": "List not found"}
     )
     respx_mock.post("/verify/batch").respond(422, json={"success": False, "errors": {}})
+    probe_routes(respx_mock)
 
     argv = [
         "--spend",
@@ -228,6 +236,19 @@ def free_routes(respx_mock) -> None:
         404, json={"success": False, "error": "List not found"}
     )
     respx_mock.post("/verify/batch").respond(422, json={"success": False, "errors": {}})
+    probe_routes(respx_mock)
+
+
+def probe_routes(respx_mock, company_field: str = "company"):
+    """The empty-body 422 probes for the two role finders (steps 4dp and 4cp)."""
+    required = "The {} field is required."
+    domain = respx_mock.post("/finder/domain", json__eq={}).respond(
+        422, json={"success": False, "errors": {"domain": [required.format("domain")]}}
+    )
+    company = respx_mock.post("/finder/company", json__eq={}).respond(
+        422, json={"success": False, "errors": {company_field: [required.format(company_field)]}}
+    )
+    return domain, company
 
 
 def throwaway_routes(respx_mock, list_id: int):
@@ -525,6 +546,7 @@ def test_no_start_and_callback_url_apply_to_batch_submit(respx_mock, monkeypatch
     )
     show, delete = throwaway_routes(respx_mock, 1492)
     status = respx_mock.get("/verify/batch/1492").respond(200, json=upload_body(id=1492))
+    probe_routes(respx_mock)
 
     argv = ["--batch", "me@personal.dev", "--no-start"]
     argv += ["--callback-url", "https://hooks.example.com/mt", "--out", str(tmp_path)]
@@ -570,3 +592,358 @@ def test_list_pages_skipped_without_meta(respx_mock, monkeypatch, tmp_path, caps
     assert not (tmp_path / "lists_page_2.json").exists()
     assert not (tmp_path / "lists_past_last_page.json").exists()
     assert "[ 2b] skipped lists_past_last_page: step 2 had no meta.total" in capsys.readouterr().out
+
+
+# role-mailbox finders (023)
+
+FINDER_ARGV = [
+    "--find-domain",
+    "acmecorp.io",
+    "--find-company",
+    "Acme Widgets Ltd",
+    "--find-company-missing",
+    "Zxqv Nonexistent Holdings",
+    "--find-domain-catchall",
+    "catchall.io",
+    "--find-domain-nomx",
+    "nonexistent-domain-x7q2.invalid",
+]
+FINDER_FLAGS = [
+    ("--find-domain", "acmecorp.io"),
+    ("--find-company", "Acme Widgets Ltd"),
+    ("--find-company-missing", "Zxqv Nonexistent Holdings"),
+    ("--find-domain-catchall", "catchall.io"),
+    ("--find-domain-nomx", "nonexistent-domain-x7q2.invalid"),
+]
+NO_MX_ERROR = "Domain 'nonexistent-domain-x7q2.invalid' has no mail (MX) records."
+
+
+def role_body(domain: str, *locals_: str, **extra) -> dict:
+    mailboxes = [
+        {"email": f"{local}@{domain}", "status": "valid", "confidence": 95} for local in locals_
+    ]
+    return {"success": True, "data": {"domain": domain, "mailboxes": mailboxes, **extra}}
+
+
+def credits_sequence(respx_mock, *balances: int):
+    """GET /credits answers with each balance in turn: credits_before, the Budget baseline, one
+    per paid finder step. The last balance repeats, for credits_after and any step past the list.
+    """
+    bodies = [{"success": True, "data": {"balance": b}} for b in balances]
+    responses = [httpx.Response(200, json=body) for body in bodies]
+    return respx_mock.get("/credits").mock(side_effect=responses + [responses[-1]] * 4)
+
+
+def finder_run_routes(respx_mock, *balances: int, company_field: str = "company"):
+    """Everything a full --spend finder run touches, with the paid finder routes returned."""
+    respx_mock.get("/lists").respond(200, json={"success": True, "data": []})
+    respx_mock.get("/verify/batch/999999999").respond(404, json={"success": False})
+    respx_mock.get("/lists/999999999").respond(404, json={"success": False})
+    respx_mock.post("/verify/batch").respond(422, json={"success": False, "errors": {}})
+    respx_mock.get("/credits", headers={"Authorization": "Bearer evp_invalid"}).respond(
+        401, json={"success": False, "error": "Invalid API key"}
+    )
+    credits_sequence(respx_mock, *balances)
+    probe_routes(respx_mock, company_field)
+    domain = respx_mock.post("/finder/domain").mock(
+        side_effect=[
+            httpx.Response(200, json=role_body("acmecorp.io", "info", "sales", credits_used=3)),
+            httpx.Response(200, json=role_body("catchall.io", "info", "sales", "support")),
+            httpx.Response(422, json={"success": False, "error": NO_MX_ERROR}),
+        ]
+    )
+    company = respx_mock.post("/finder/company").mock(
+        side_effect=[
+            httpx.Response(200, json=role_body("acmecorp.io", "info", company="Acme Widgets Ltd")),
+            httpx.Response(200, json={"success": True, "data": {"domain": None, "mailboxes": []}}),
+        ]
+    )
+    return domain, company
+
+
+def run_finders(monkeypatch, tmp_path, *argv: str) -> int:
+    monkeypatch.setattr(discover, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_realkey123")
+    return discover.main([*argv, "--out", str(tmp_path)])
+
+
+def record(tmp_path, name: str) -> dict:
+    return json.loads((tmp_path / f"{name}.json").read_text())
+
+
+@pytest.mark.parametrize(("flag", "value"), FINDER_FLAGS)
+def test_planned_cost_counts_each_finder_flag(flag, value):
+    assert discover.planned_cost(discover.parse_args([flag, value])) == 3
+
+
+def test_planned_cost_sums_the_finder_flags():
+    assert discover.planned_cost(discover.parse_args(FINDER_ARGV)) == 15
+    both = [*FINDER_ARGV, "--verify-email", "me@personal.dev"]
+    assert discover.planned_cost(discover.parse_args(both)) == 16
+
+
+def test_finder_flags_require_spend(capsys):
+    assert discover.main(FINDER_ARGV) == 2
+    assert "15 credits" in capsys.readouterr().err
+    assert discover.main(["--find-domain", "acmecorp.io"]) == 2
+    assert "3 credits" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (422, {"success": False, "errors": {"name": ["The name field is required."]}}, "name"),
+        (422, {"success": False, "errors": {"company": ["x"], "country": ["y"]}}, "company"),
+        (422, {"success": False, "error": "nope"}, "company"),
+        (200, {"success": True, "data": {}}, "company"),
+    ],
+)
+def test_required_field_reads_the_one_errors_key(status, body, expected):
+    resp = httpx.Response(status, json=body)
+    assert discover._required_field(resp, "company") == expected
+
+
+def test_required_field_without_json_falls_back():
+    assert discover._required_field(httpx.Response(500, text="boom"), "domain") == "domain"
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_probe_status_other_than_422_is_recorded_not_fatal(
+    respx_mock, monkeypatch, tmp_path, capsys
+):
+    free_routes(respx_mock)
+    # Same pattern as the probe route in free_routes, so respx replaces that route with this one.
+    respx_mock.post("/finder/domain", json__eq={}).respond(
+        500, json={"success": False, "error": "Verification failed"}
+    )
+
+    assert run_finders(monkeypatch, tmp_path) == 0
+
+    assert record(tmp_path, "finder_domain_422")["status"] == 500
+    assert "[4dp] expected 422 from an empty body, got 500" in capsys.readouterr().out
+    assert (tmp_path / "finder_company_422.json").exists()
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_paid_finder_run_records_all_seven_fixtures(respx_mock, monkeypatch, tmp_path, capsys):
+    domain, company = finder_run_routes(respx_mock, 71, 71, 68, 65, 65, 62, 62)
+
+    assert run_finders(monkeypatch, tmp_path, "--spend", *FINDER_ARGV) == 0
+
+    assert domain.call_count == 3 and company.call_count == 2
+    names = {p.name for p in tmp_path.iterdir()}
+    assert {
+        "finder_domain_422.json",
+        "finder_company_422.json",
+        "finder_domain.json",
+        "finder_company.json",
+        "finder_company_missing.json",
+        "finder_domain_catch_all.json",
+        "finder_domain_no_mx.json",
+        "credits_before.json",
+        "credits_after.json",
+    } <= names
+    assert record(tmp_path, "finder_domain")["request"]["json"] == {"domain": "example.com"}
+    assert record(tmp_path, "finder_company")["request"]["json"] == {"company": "Acme"}
+    missing = record(tmp_path, "finder_company_missing")
+    assert missing["request"]["json"] == {"company": "Nowhere"}
+    assert missing["status"] == 200 and missing["body"]["data"]["mailboxes"] == []
+    catch_all = record(tmp_path, "finder_domain_catch_all")
+    assert catch_all["request"]["json"] == {"domain": "example.net"}
+    no_mx = record(tmp_path, "finder_domain_no_mx")
+    # A reserved .invalid name isn't redacted, so the fixture matches 012's finder_no_mx.
+    assert no_mx["request"]["json"] == {"domain": "nonexistent-domain-x7q2.invalid"}
+    assert no_mx["status"] == 422 and no_mx["body"]["error"] == NO_MX_ERROR
+    assert record(tmp_path, "finder_domain")["body"]["data"]["mailboxes"][0] == {
+        "email": "info@example.com",
+        "status": "valid",
+        "confidence": 95,
+    }
+    out = capsys.readouterr().out
+    assert "[ 4d] GET /credits -> balance 68 (step 3, run total 3)" in out
+    assert "[4dn] GET /credits -> balance 62 (step 0, run total 9)" in out
+    # The order the spec gives: 4d, 4c, 4cm, 4dc, 4dn.
+    steps = [line[1:4].strip() for line in out.splitlines() if " /finder/" in line]
+    assert steps == ["4dp", "4cp", "4d", "4c", "4cm", "4dc", "4dn"]
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_finder_fixtures_redact_inputs_and_the_resolved_domain(respx_mock, monkeypatch, tmp_path):
+    finder_run_routes(respx_mock, 71, 71, 68, 65, 65, 65, 65)
+    resolved = role_body("acme-widgets.co", "info", "press", company="Acme Widgets Ltd")
+    respx_mock.post("/finder/company").mock(
+        side_effect=[
+            httpx.Response(200, json=resolved),
+            httpx.Response(200, json={"success": True, "data": {"domain": None, "mailboxes": []}}),
+        ]
+    )
+    argv = ["--spend", "--find-domain", "acmecorp.io", "--find-company", "Acme Widgets Ltd"]
+    argv += ["--find-company-missing", "Zxqv Nonexistent Holdings"]
+
+    assert run_finders(monkeypatch, tmp_path, *argv) == 0
+
+    data = record(tmp_path, "finder_company")["body"]["data"]
+    assert data["domain"] == "example.net"  # resolved, never an input, still redacted
+    assert data["company"] == "Acme"
+    assert [m["email"] for m in data["mailboxes"]] == ["info@example.net", "press@example.net"]
+    text = "".join(p.read_text() for p in tmp_path.iterdir())
+    for real in ("acmecorp", "acme-widgets", "Widgets", "Zxqv", "evp_"):
+        assert real not in text
+
+
+def test_redactor_registers_finder_inputs():
+    r = discover.build_redactor(discover.parse_args(FINDER_ARGV), "evp_realkey123")
+    assert r.domains == {"acmecorp.io": "example.com", "catchall.io": "example.net"}
+    assert r.names == {"acme widgets ltd": "Acme", "zxqv nonexistent holdings": "Nowhere"}
+    assert r.text("info@acmecorp.io sales@catchall.io Acme Widgets Ltd") == (
+        "info@example.com sales@example.net Acme"
+    )
+    assert "acme widgets ltd" in r.leaks("Acme Widgets Ltd is real")
+    both = discover.parse_args(["--find", "Jo", "Smith", "a.io", "--find-domain", "b.io"])
+    r = discover.build_redactor(both, "k")
+    assert r.domains == {"a.io": "example.com", "b.io": "example.net"}
+
+
+def test_invalid_tld_is_not_redacted():
+    # .invalid is reserved (RFC 2606), so there's nothing to hide and the fixture keeps the name.
+    args = discover.parse_args(["--find-domain-nomx", "nonexistent-domain-x7q2.invalid"])
+    r = discover.build_redactor(args, "k")
+    assert r.domains == {}
+    assert r.text("Domain 'nonexistent-domain-x7q2.invalid' has no MX") == (
+        "Domain 'nonexistent-domain-x7q2.invalid' has no MX"
+    )
+    discover._register_domains(r, [{"domain": "x.invalid"}, {"domain": "Real.io"}])
+    assert r.domains == {"real.io": "example.com"}
+
+
+def test_register_domains_walks_nested_data():
+    r = discover.Redactor()
+    r.domain("known.io")
+    data = {
+        "domain": "known.io",
+        "mailboxes": [{"email": "info@a.io", "domain": "a.io"}, {"domain": ""}, {"domain": 3}],
+        "nested": {"domain": "B.io", "other": "c.io"},
+    }
+    discover._register_domains(r, data)
+    assert r.domains == {"known.io": "example.com", "a.io": "example.net", "b.io": "example.org"}
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_skips_catch_all_step_when_first_call_costs_more_than_3(
+    respx_mock, monkeypatch, tmp_path, capsys
+):
+    # 4d costs 4, 4c costs 4, 4cm and 4dn are free: 8 spent, under the 15 planned.
+    domain, company = finder_run_routes(respx_mock, 71, 71, 67, 63, 63, 63)
+    domain.side_effect = [
+        httpx.Response(200, json=role_body("acmecorp.io", "info", "sales", "support", "hr")),
+        httpx.Response(422, json={"success": False, "error": "Domain 'x' has no MX records."}),
+    ]
+
+    assert run_finders(monkeypatch, tmp_path, "--spend", *FINDER_ARGV) == 0
+
+    assert domain.call_count == 2 and company.call_count == 2
+    assert not (tmp_path / "finder_domain_catch_all.json").exists()
+    assert record(tmp_path, "finder_domain_no_mx")["status"] == 422
+    out = capsys.readouterr().out
+    assert "[ 4d] cost 4, not 3: per-mailbox pricing? skipping step 4dc" in out
+    assert "[4dc] skipped finder_domain_catch_all: step 4d showed a per-mailbox cost" in out
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_stops_before_a_call_that_could_exceed_the_plan(respx_mock, monkeypatch, tmp_path, capsys):
+    # 4d costs 9: another 9 would pass 15, so 4c never runs.
+    domain, company = finder_run_routes(respx_mock, 71, 71, 62, 62)
+
+    assert run_finders(monkeypatch, tmp_path, "--spend", *FINDER_ARGV) == 1
+
+    assert domain.call_count == 1 and not company.called
+    err = capsys.readouterr().err
+    assert "STOPPED: step 4c could cost 9 and push the spend past 15" in err
+    assert (tmp_path / "credits_after.json").exists()
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_stops_when_the_spend_passes_the_plan(respx_mock, monkeypatch, tmp_path, capsys):
+    domain, _ = finder_run_routes(respx_mock, 71, 71, 66)
+
+    assert run_finders(monkeypatch, tmp_path, "--spend", "--find-domain", "acmecorp.io") == 1
+
+    assert domain.call_count == 1
+    assert "STOPPED: spent 5 credits, more than the 3 planned" in capsys.readouterr().err
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_finder_5xx_at_the_first_step_stops_the_rest(respx_mock, monkeypatch, tmp_path, capsys):
+    domain, company = finder_run_routes(respx_mock, 71, 71, 71)
+    domain.side_effect = [httpx.Response(502, json={"success": False, "error": "unavailable"})]
+
+    assert run_finders(monkeypatch, tmp_path, "--spend", *FINDER_ARGV) == 1
+
+    assert domain.call_count == 1 and not company.called
+    assert record(tmp_path, "finder_domain")["status"] == 502
+    names = {p.name for p in tmp_path.iterdir()}
+    assert "credits_after.json" in names and "error_401.json" in names
+    assert "STOPPED: step 4d returned 502" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (200, {"success": True, "data": {"domain": None, "mailboxes": []}}),
+        (404, {"success": False, "error": "Company not found"}),
+        (422, {"success": False, "error": "Could not resolve a domain for 'x'."}),
+    ],
+)
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_no_match_outcomes_are_recorded_not_fatal(respx_mock, monkeypatch, tmp_path, status, body):
+    domain, company = finder_run_routes(respx_mock, 71, 71, 68, 65, 65, 62, 62)
+    company.side_effect = [
+        httpx.Response(200, json=role_body("acmecorp.io", "info")),
+        httpx.Response(status, json=body),
+    ]
+
+    assert run_finders(monkeypatch, tmp_path, "--spend", *FINDER_ARGV) == 0
+
+    assert domain.call_count == 3  # 4dc and 4dn still ran after the no-match
+    missing = record(tmp_path, "finder_company_missing")
+    assert missing["status"] == status and missing["body"] == body
+    assert record(tmp_path, "finder_domain_no_mx")["status"] == 422
+
+
+@pytest.mark.parametrize("status", [401, 402, 429, 500])
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_other_statuses_at_a_no_match_step_stop(respx_mock, monkeypatch, tmp_path, status):
+    domain, company = finder_run_routes(respx_mock, 71, 71, 68, 65, 65)
+    company.side_effect = [
+        httpx.Response(200, json=role_body("acmecorp.io", "info")),
+        httpx.Response(status, json={"success": False, "error": "x"}),
+    ]
+
+    assert run_finders(monkeypatch, tmp_path, "--spend", *FINDER_ARGV) == 1
+
+    assert domain.call_count == 1  # neither 4dc nor 4dn ran
+    assert record(tmp_path, "finder_company_missing")["status"] == status
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_company_field_follows_the_probe(respx_mock, monkeypatch, tmp_path, capsys):
+    _, company = finder_run_routes(respx_mock, 71, 71, 68, company_field="name")
+    argv = ["--spend", "--find-company", "Acme Widgets Ltd"]
+
+    assert run_finders(monkeypatch, tmp_path, *argv) == 0
+
+    assert json.loads(company.calls.last.request.content) == {"name": "Acme Widgets Ltd"}
+    assert record(tmp_path, "finder_company")["request"]["json"] == {"name": "Acme"}
+    assert "[4cp] /finder/company takes `name`, not `company`" in capsys.readouterr().out
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_budget_without_a_balance_runs_every_step(respx_mock, monkeypatch, tmp_path, capsys):
+    domain, company = finder_run_routes(respx_mock, 71)
+    respx_mock.get("/credits").respond(200, json={"success": True, "data": {}})
+
+    assert run_finders(monkeypatch, tmp_path, "--spend", *FINDER_ARGV) == 0
+
+    assert domain.call_count == 3 and company.call_count == 2
+    out = capsys.readouterr().out
+    assert "[ 4d] GET /credits -> balance unknown; the cost isn't checked" in out
