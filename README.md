@@ -63,7 +63,7 @@ $ mailtester --help
 ╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
-Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` API or runtime error (including `find`, `find-domain`, or `find-company` with no match, and a `verify` run in which any address failed), `2` usage error, `3` a `verify` verdict matched `--fail-on`, `130` interrupted. Under `--json`, an error is one JSON object on stderr; see [Scripting](#scripting). A rate-limited or failed request is retried a couple of times before a command gives up, and each retry prints a line on stderr, such as `Rate limited, retrying in 30s...`.
+Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` an API or runtime error (including a `verify` run in which any address failed), no match from a finder (`find`, `find-domain`, `find-company`), or a declined prompt, `2` usage error, `3` a `verify` verdict matched `--fail-on`, `130` interrupted. Under `--json`, an error is one JSON object on stderr; see [Scripting](#scripting) for the two exit-`1` cases that aren't errors. A rate-limited or failed request is retried a couple of times before a command gives up, and each retry prints a line on stderr, such as `Rate limited, retrying in 30s...`.
 
 ### Verify addresses
 
@@ -230,7 +230,7 @@ Rate limit 59 of 60 left, resets 2026-10-30 14:02:11 UTC
 
 ### Scripting
 
-Under `--json`, an error is one JSON object on one line of stderr instead of an `Error: ...` sentence, and nothing goes to stdout. The exit code is the same as in text mode.
+Under `--json`, an error is one JSON object on one line of stderr instead of an `Error: ...` sentence. Errors never go to stdout, which holds only results. The exit code is the same as in text mode.
 
 ```text
 $ mailtester --json verify x@example.com
@@ -238,7 +238,9 @@ This will use 1 credit.
 {"error": "Insufficient credits", "type": "InsufficientCreditsError", "status_code": 402, "available_credits": 0}
 ```
 
-The keys are `error` (the API's message), `type` (the exception class, or `UsageError`/`CLIError` for a problem the CLI caught itself), and `status_code` (`null` when no response came back), then, only when they apply: `errors` (the field map of a `422`), `available_credits`, `retry_after`, and `hint` (what to run next, such as `Resume with: mailtester batch wait 1288`). `lists delete` prints one object per failed id with an `id` key, and a `verify` run of several addresses prints one per failed address with an `email` key. Notes such as cost lines, retry lines, and batch progress stay text, so the rule for a script is: when the exit code is non-zero because of an error, the last line on stderr is the JSON object. Errors from the argument parser itself (a missing argument, an out-of-range `--timeout`) are text and exit `2`.
+The keys are `error` (the API's message), `type` (the exception class, or `UsageError`/`CLIError` for a problem the CLI caught itself), and `status_code` (`null` when no response came back), then, only when they apply: `errors` (the field map of a `422`), `available_credits`, `retry_after`, and `hint` (what to run next, such as `Resume with: mailtester batch wait 1288`). `lists delete` prints one object per failed id with an `id` key, and a `verify` run of several addresses prints one per failed address with an `email` key. Notes such as cost lines, retry lines, and batch progress stay text, so the rule for a script is: when a command fails on an error (anything that prints `Error:` in text mode), the last line on stderr is the JSON object.
+
+Two cases exit `1` without one, because they aren't errors. A `find`, `find-domain`, or `find-company` with no match still prints its payload on stdout, and a note on stderr, such as `No address found for Jane Doe at example.com.` Answering no to a prompt prints `Aborted.` on stderr. Errors from the argument parser itself (a missing argument, an out-of-range `--timeout`) are text and exit `2`.
 
 `verify --fail-on VERDICT[,VERDICT]` exits `3` when a verdict is one you name (`valid`, `risky`, `invalid`, `unknown`), after printing the result as usual. With several addresses it exits `3` if any of them matched, unless an address failed, which exits `1`.
 

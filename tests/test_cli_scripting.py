@@ -511,3 +511,13 @@ def test_base_url_credentials_are_not_shown(respx_mock, api_key, monkeypatch, cl
     )
     with MailTester(api_key="evp_test") as mt:
         assert "hunter2" not in repr(mt)
+
+
+def test_declined_prompt_stays_text_under_json(respx_mock, guard, api_key, tmp_path):
+    path = tmp_path / "emails.txt"
+    path.write_text("\n".join(f"user{i}@example.com" for i in range(100)) + "\n")
+    result = runner.invoke(app, ["--json", "verify", "--file", str(path)], input="n\n")
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.endswith("Aborted.\n")  # not an error, so no JSON object
+    assert not guard.called
