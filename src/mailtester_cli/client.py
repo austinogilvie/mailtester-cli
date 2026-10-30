@@ -201,7 +201,8 @@ def _resolve_key(api_key: str | None, settings: _Settings) -> tuple[str, bool]:
     # httpx echoes a rejected header value in its error, so never send a malformed key.
     if not (key.isascii() and key.isprintable()) or any(c.isspace() for c in key):
         raise MissingAPIKeyError(
-            f"{ENV_VAR} contains spaces, line breaks, or other invalid characters."
+            f"{ENV_VAR} contains spaces, line breaks, or other invalid characters.",
+            malformed=True,
         )
     return key, from_dotenv
 

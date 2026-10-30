@@ -16,6 +16,7 @@ from mailtester_cli.client import MailTester, RetryAttempt
 from mailtester_cli.errors import (
     InsufficientCreditsError,
     MailTesterError,
+    MissingAPIKeyError,
     RateLimitError,
     ServerError,
     ValidationError,
@@ -181,7 +182,9 @@ def handle_errors() -> Iterator[None]:
     try:
         yield
     except MailTesterError as exc:
-        fail(error=exc)
+        # The library's missing-key message predates --api-key, which only the CLI has.
+        missing = isinstance(exc, MissingAPIKeyError) and not exc.malformed
+        fail(error=exc, hint="Or pass --api-key before the command." if missing else None)
     except KeyboardInterrupt:
         typer.echo("Interrupted.", err=True)
         raise typer.Exit(130) from None

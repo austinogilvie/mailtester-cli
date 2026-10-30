@@ -24,7 +24,11 @@ class MailTesterError(Exception):
 
 
 class MissingAPIKeyError(MailTesterError):
-    """No API key was found."""
+    """No usable API key. `malformed` is True when one was found but can't be sent."""
+
+    def __init__(self, message: str, *, malformed: bool = False, **kwargs: Any):
+        super().__init__(message, **kwargs)
+        self.malformed = malformed
 
 
 class AuthenticationError(MailTesterError):

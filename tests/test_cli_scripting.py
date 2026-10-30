@@ -195,6 +195,36 @@ def test_missing_key(monkeypatch):
     assert "MAILTESTER_API_KEY" in obj["error"]
 
 
+def test_missing_key_hint_names_api_key_option(monkeypatch):
+    monkeypatch.delenv("MAILTESTER_API_KEY", raising=False)
+    result = runner.invoke(app, ["credits"])
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "Error: MAILTESTER_API_KEY is not set. Set it in your environment or in a .env file. "
+        "Or pass --api-key before the command.\n"
+    )
+
+
+def test_missing_key_hint_json(monkeypatch):
+    monkeypatch.delenv("MAILTESTER_API_KEY", raising=False)
+    result = runner.invoke(app, ["--json", "credits"])
+    obj = last_error(result)
+    assert obj["error"] == (
+        "MAILTESTER_API_KEY is not set. Set it in your environment or in a .env file."
+    )
+    assert obj["hint"] == "Or pass --api-key before the command."
+
+
+@pytest.mark.parametrize("args", [["credits"], ["--json", "credits"]])
+def test_malformed_key_gets_no_api_key_hint(monkeypatch, args):
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_abc def")
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert "invalid characters" in result.stderr
+    assert "--api-key" not in result.stderr
+    assert "evp_abc" not in result.stderr
+
+
 def test_usage_error(respx_mock, guard, api_key, tmp_path):
     path = tmp_path / "emails.txt"
     path.write_text("a@example.com\n")
