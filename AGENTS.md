@@ -16,7 +16,7 @@ src/mailtester_cli/
   cli.py        # Typer app, global options, command registration
   commands/
     __init__.py # empty
-    _shared.py  # State, client(), handle_errors, confirm, print_json, fmt_int, fail
+    _shared.py  # State, get_state/set_state, client(), handle_errors, fail, report_error, error_object, confirm, print_json, fmt_int
     _input.py   # read_addresses (args + file/stdin, dedupe), confirm_spend, CONFIRM_THRESHOLD
     verify.py   # verify (one address or many)
     finder.py   # find, find-domain, find-company
@@ -46,7 +46,8 @@ Planned work is tracked as GitHub Issues on `austinogilvie/mailtester-cli`, view
 
 ## Configuration
 
-- The API key comes from the `MAILTESTER_API_KEY` environment variable and is loaded from `.env` when present.
+- The API key comes from the global `--api-key` option, then the `MAILTESTER_API_KEY` environment variable, then `.env`. An empty value falls through. The `--api-key` value is never printed (`State.api_key` is `repr=False`).
+- `MAILTESTER_BASE_URL` (environment, then `.env`) overrides the base URL for a proxy or mock; a `base_url` argument to `MailTester` wins over both. The `.env` value counts only when the key also came from `.env`, so a `.env` can redirect only the key it supplies; when the key comes from elsewhere, `.env` isn't read at all. Tests clear it in the autouse `_isolate_env` fixture.
 - `.env` is gitignored and holds the real key. `.env.example` holds a placeholder. Never commit, print, or log the real key.
 - If the key is missing, exit non-zero with a clear message that tells the user to set `MAILTESTER_API_KEY`.
 
@@ -110,7 +111,9 @@ Show the raw values, and don't try to make the two match. Disposable addresses c
 ## CLI conventions
 
 - Human-readable output by default. A `--json` flag prints the raw `data` payload for piping to `jq`.
-- Send errors to stderr and exit non-zero. Print the API's error message instead of a stack trace.
+- Send errors to stderr and exit non-zero. Print the API's error message instead of a stack trace. Every error goes through `fail` (or `report_error` for one item of many): `Error: ...` in text mode, one `error_object` JSON line under `--json` (`error`, `type`, `status_code`, then `errors`, `available_credits`, `retry_after`, `hint` when present). Notes (cost, retries, progress, `Aborted.`, `Interrupted.`) stay text in both modes, so under `--json`, when a command fails on an error (anything that prints `Error:` in text mode), the last stderr line is the error object. Two exit-`1` cases have no error object: a finder with no match (the payload is on stdout, and a note on stderr) and `Aborted.` after a declined prompt.
+- Pass `error=exc` to `fail` for a client error (it reads the message from the exception) and a message only for an error the CLI caught itself. `error_fields` is the one place an error's extra fields are defined.
+- Exit codes: `0` success, `1` error, `2` usage, `3` a `verify` verdict matched `--fail-on`, `130` interrupted.
 - Every command that spends credits says what it will cost on stderr. At 100 addresses or more (`CONFIRM_THRESHOLD`), `verify` and `batch submit` ask for confirmation unless `--yes` is passed.
 - Commands that read many addresses (`verify`, `batch submit`) go through `read_addresses`, which drops case-insensitive repeats so a repeat never costs a second credit.
 - Keep the HTTP client in one module, separate from command definitions, so commands stay thin.

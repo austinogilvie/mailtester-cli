@@ -5,7 +5,7 @@ from typer.core import TyperGroup
 
 from mailtester_cli import __version__
 from mailtester_cli.commands import account, batch, finder, lists, verify
-from mailtester_cli.commands._shared import State
+from mailtester_cli.commands._shared import State, set_state
 
 COMMAND_ORDER = ["verify", "batch", "find", "find-domain", "find-company", "lists", "credits"]
 
@@ -38,6 +38,12 @@ def main(
     json_output: bool = typer.Option(
         False, "--json", help="Print raw JSON instead of formatted output."
     ),
+    api_key: str | None = typer.Option(
+        None,
+        "--api-key",
+        show_default=False,
+        help="API key for this run. Shows in process lists; prefer MAILTESTER_API_KEY.",
+    ),
     version: bool = typer.Option(
         False,
         "--version",
@@ -47,7 +53,7 @@ def main(
     ),
 ) -> None:
     """Verify and find email addresses with the MailTester API."""
-    ctx.obj = State(json=json_output)
+    set_state(ctx, State(json=json_output, api_key=api_key))
 
 
 verify.register(app)

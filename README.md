@@ -32,7 +32,9 @@ cp .env.example .env
 MAILTESTER_API_KEY=evp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-An environment variable wins over `.env`. `mailtester` looks for `.env` in the directory you run it from (and its parents), so an installed `mailtester` still finds your project's key.
+`--api-key` (before the command, like `--json`) wins over the environment variable, which wins over `.env`. `mailtester` looks for `.env` in the directory you run it from (and its parents), so an installed `mailtester` still finds your project's key. `--api-key` shows up in process lists and shell history, so prefer the variable for anything long-lived.
+
+To point the client at a proxy, a staging host, or a local mock, set `MAILTESTER_BASE_URL` (for example `http://localhost:8080/api/v1`) in the environment or `.env`. A `MAILTESTER_BASE_URL` in `.env` counts only when the key comes from the same `.env`, so a `.env` in some other project's directory can't send the key from your environment or `--api-key` to its own host.
 
 ## CLI
 
@@ -44,9 +46,11 @@ $ mailtester --help
  Verify and find email addresses with the MailTester API.
 
 ╭─ Options ───────────────────────────────────────────────────────────────╮
-│ --json             Print raw JSON instead of formatted output.          │
-│ --version          Show the version and exit.                           │
-│ --help             Show this message and exit.                          │
+│ --json                  Print raw JSON instead of formatted output.     │
+│ --api-key        <str>  API key for this run. Shows in process lists;   │
+│                         prefer MAILTESTER_API_KEY.                      │
+│ --version               Show the version and exit.                      │
+│ --help                  Show this message and exit.                     │
 ╰─────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ──────────────────────────────────────────────────────────────╮
 │ verify        Verify email addresses. (1 credit each)                   │
@@ -59,7 +63,7 @@ $ mailtester --help
 ╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
-Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` API or runtime error (including `find`, `find-domain`, or `find-company` with no match, and a `verify` run in which any address failed), `2` usage error, `130` interrupted. A rate-limited or failed request is retried a couple of times before a command gives up, and each retry prints a line on stderr, such as `Rate limited, retrying in 30s...`.
+Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` an API or runtime error (including a `verify` run in which any address failed), no match from a finder (`find`, `find-domain`, `find-company`), or a declined prompt, `2` usage error, `3` a `verify` verdict matched `--fail-on`, `130` interrupted. Under `--json`, an error is one JSON object on stderr; see [Scripting](#scripting) for the two exit-`1` cases that aren't errors. A rate-limited or failed request is retried a couple of times before a command gives up, and each retry prints a line on stderr, such as `Rate limited, retrying in 30s...`.
 
 ### Verify addresses
 
@@ -217,11 +221,34 @@ Deleted list 1493
 $ mailtester credits
 Balance    5,000 credits
 Account    pay_as_you_go
+Rate limit 59 of 60 left, resets 2026-10-30 14:02:11 UTC
 ```
 
-`lists` shows 25 lists per page. Use `--page` and `--per-page` to move around, or `--all` to fetch every page. The page hint goes to stderr, so `> file` captures only the table. Accounts with a monthly allowance get an extra `credits` line, for example `Monthly    1,000 (renews 2026-11-01)`.
+`lists` shows 25 lists per page. Use `--page` and `--per-page` to move around, or `--all` to fetch every page. The page hint goes to stderr, so `> file` captures only the table. Accounts with a monthly allowance get an extra `credits` line, for example `Monthly    1,000 (renews 2026-11-01)`. The `Rate limit` line comes from the response headers, which don't say how long the window is (per minute by default, but a key's window can be per hour or day); `--json credits` prints only the API's `data`, without it.
 
 `lists delete` takes one or more ids and asks once before deleting unless you pass `--yes`. Deleting a list removes its results. Each deleted id prints `Deleted list <id>`; an id that isn't found or is still processing prints the API's error and the command carries on with the rest, exiting `1` at the end if any id failed. Any other error, such as a rate limit or a bad key, stops the command. The API refuses to delete a list that's still processing, and the error says so.
+
+### Scripting
+
+Under `--json`, an error is one JSON object on one line of stderr instead of an `Error: ...` sentence. Errors never go to stdout, which holds only results. The exit code is the same as in text mode.
+
+```text
+$ mailtester --json verify x@example.com
+This will use 1 credit.
+{"error": "Insufficient credits", "type": "InsufficientCreditsError", "status_code": 402, "available_credits": 0}
+```
+
+The keys are `error` (the API's message), `type` (the exception class, or `UsageError`/`CLIError` for a problem the CLI caught itself), and `status_code` (`null` when no response came back), then, only when they apply: `errors` (the field map of a `422`), `available_credits`, `retry_after`, and `hint` (what to run next, such as `Resume with: mailtester batch wait 1288`). `lists delete` prints one object per failed id with an `id` key, and a `verify` run of several addresses prints one per failed address with an `email` key. Notes such as cost lines, retry lines, and batch progress stay text, so the rule for a script is: when a command fails on an error (anything that prints `Error:` in text mode), the last line on stderr is the JSON object.
+
+Two cases exit `1` without one, because they aren't errors. A `find`, `find-domain`, or `find-company` with no match still prints its payload on stdout, and a note on stderr, such as `No address found for Jane Doe at example.com.` Answering no to a prompt prints `Aborted.` on stderr. Errors from the argument parser itself (a missing argument, an out-of-range `--timeout`) are text and exit `2`.
+
+`verify --fail-on VERDICT[,VERDICT]` exits `3` when a verdict is one you name (`valid`, `risky`, `invalid`, `unknown`), after printing the result as usual. With several addresses it exits `3` if any of them matched, unless an address failed, which exits `1`.
+
+```bash
+mailtester verify "$EMAIL" --fail-on invalid,unknown && send "$EMAIL"
+```
+
+For a second account, pass `--api-key` before the command. For a mock server, set `MAILTESTER_BASE_URL` (see [Configure](#configure)).
 
 ## Python
 
@@ -230,7 +257,7 @@ The CLI is a thin layer over a Python client that you can use directly.
 ```python
 from mailtester_cli import MailTester
 
-mt = MailTester()  # reads MAILTESTER_API_KEY from the environment or .env
+mt = MailTester()  # reads MAILTESTER_API_KEY (and MAILTESTER_BASE_URL) from the environment or .env
 # or: MailTester(api_key="evp_...")
 ```
 
