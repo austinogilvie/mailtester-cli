@@ -69,7 +69,7 @@ def _print_retry(retry: RetryAttempt) -> None:
 
 
 def fail(
-    message: str,
+    message: str | None = None,
     code: int = 1,
     *,
     error: MailTesterError | None = None,
@@ -77,9 +77,12 @@ def fail(
 ) -> NoReturn:
     """Print the error on stderr and exit with `code`.
 
-    Text mode prints `Error: <message>. <hint>`, with `error_message`'s suffixes when `error`
-    is given. Under --json it prints one `error_object` line instead.
+    Pass `error` for a client error, whose message it carries, or `message` for a local one.
+    Text mode prints `Error: <message>. <hint>`, with `error_message`'s suffixes for `error`.
+    Under --json it prints one `error_object` line instead.
     """
+    if (message is None) == (error is None):
+        raise TypeError("fail() takes exactly one of message and error")
     _print_error(message, code, error=error, hint=hint)
     raise typer.Exit(code)
 
@@ -90,36 +93,46 @@ def report_error(exc: MailTesterError, *, prefix: str = "", **fields: Any) -> No
     Text mode prints `Error: <prefix><message>`; under --json the error object gains `fields`
     (for example `id=1492` or `email=...`) instead of the prefix.
     """
-    _print_error(str(exc), 1, error=exc, prefix=prefix, fields=fields)
+    _print_error(None, 1, error=exc, prefix=prefix, fields=fields)
 
 
 def error_object(
-    message: str, code: int, error: MailTesterError | None, hint: str | None
+    message: str | None, code: int, error: MailTesterError | None, hint: str | None
 ) -> dict[str, Any]:
     """The --json form of an error: `error`, `type`, `status_code`, then the fields present.
 
-    `error` is the bare message; the numbers `error_message` appends for humans are their own
-    keys. A local error with no exception is a `UsageError` (exit 2) or a `CLIError`.
+    `error` is the bare message (the exception's when `error` is given); `error_fields` become
+    their own keys. A local error with no exception is a `UsageError` (exit 2) or a `CLIError`.
     """
     local = "UsageError" if code == 2 else "CLIError"
     obj: dict[str, Any] = {
-        "error": message,
+        "error": str(error) if error is not None else message,
         "type": type(error).__name__ if error is not None else local,
         "status_code": error.status_code if error is not None else None,
     }
-    if isinstance(error, ValidationError) and error.errors:
-        obj["errors"] = error.errors
-    if isinstance(error, InsufficientCreditsError) and error.available_credits is not None:
-        obj["available_credits"] = error.available_credits
-    if isinstance(error, RateLimitError) and error.retry_after is not None:
-        obj["retry_after"] = error.retry_after
+    if error is not None:
+        obj |= error_fields(error)
     if hint:
         obj["hint"] = hint
     return obj
 
 
+def error_fields(exc: MailTesterError) -> dict[str, Any]:
+    """The extra fields `exc` carries: the 422 `errors` map, `available_credits`, `retry_after`.
+
+    The one place they're defined: `error_object` adds them as keys, `error_message` as text.
+    """
+    if isinstance(exc, ValidationError) and exc.errors:
+        return {"errors": exc.errors}
+    if isinstance(exc, InsufficientCreditsError) and exc.available_credits is not None:
+        return {"available_credits": exc.available_credits}
+    if isinstance(exc, RateLimitError) and exc.retry_after is not None:
+        return {"retry_after": exc.retry_after}
+    return {}
+
+
 def _print_error(
-    message: str,
+    message: str | None,
     code: int,
     *,
     error: MailTesterError | None = None,
@@ -131,7 +144,7 @@ def _print_error(
         obj = error_object(message, code, error, hint) | (fields or {})
         typer.echo(json.dumps(obj, ensure_ascii=False), err=True)
         return
-    text = error_message(error) if error is not None else message
+    text = error_message(error) if error is not None else message or ""
     if hint:
         text = f"{text.rstrip('.')}. {hint}"
     typer.echo(f"Error: {prefix}{text}", err=True)
@@ -152,12 +165,13 @@ def confirm(question: str) -> bool:
 def error_message(exc: MailTesterError) -> str:
     """The API's message, plus the available-credits or retry hint when there is one."""
     message = str(exc)
-    if isinstance(exc, InsufficientCreditsError) and exc.available_credits is not None:
-        message += f" (available credits: {fmt_int(exc.available_credits)})"
-    elif isinstance(exc, RateLimitError) and exc.retry_after is not None:
+    fields = error_fields(exc)
+    if "available_credits" in fields:
+        message += f" (available credits: {fmt_int(fields['available_credits'])})"
+    if "retry_after" in fields:
         if not message.endswith((".", "!", "?")):
             message += "."
-        message += f" Retry in {exc.retry_after}s."
+        message += f" Retry in {fields['retry_after']}s."
     return message
 
 
@@ -167,7 +181,7 @@ def handle_errors() -> Iterator[None]:
     try:
         yield
     except MailTesterError as exc:
-        fail(str(exc), error=exc)
+        fail(error=exc)
     except KeyboardInterrupt:
         typer.echo("Interrupted.", err=True)
         raise typer.Exit(130) from None

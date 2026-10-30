@@ -123,14 +123,14 @@ def _wait_and_write(
     except BatchNotStartedError as exc:
         # Never "run this again": for submit/upload --wait that would pay for a second batch.
         start = f"Start it in the MailTester app, then resume with: {wait_cmd}"
-        fail(str(exc), error=exc, hint=start)
+        fail(error=exc, hint=start)
     except BatchTimeoutError as exc:
-        fail(str(exc), error=exc, hint=f"Resume with: {wait_cmd}")
+        fail(error=exc, hint=f"Resume with: {wait_cmd}")
     except (BatchFailedError, NotFoundError):
         raise
     except MailTesterError as exc:
         running = f"Batch {batch_id} may still be running. {resume_hint}"
-        fail(str(exc), error=exc, hint=running)
+        fail(error=exc, hint=running)
     except KeyboardInterrupt:
         typer.echo(
             f"Stopped waiting. Batch {batch_id} is still running. Resume with: {wait_cmd}",
@@ -141,7 +141,7 @@ def _wait_and_write(
         _write_results(mt, batch_id, filter_, format_)
     except MailTesterError as exc:
         fetch = f"Batch {batch_id} is complete. Fetch it with: mailtester batch results {batch_id}"
-        fail(str(exc), error=exc, hint=fetch)
+        fail(error=exc, hint=fetch)
 
 
 @batch_app.command()
@@ -335,7 +335,7 @@ def results(
             if exc.status_code != 400:
                 raise
             hint = f"Check it with: mailtester batch status {batch_id}"
-            fail(str(exc), error=exc, hint=hint)
+            fail(error=exc, hint=hint)
 
 
 def register(app: typer.Typer) -> None:
