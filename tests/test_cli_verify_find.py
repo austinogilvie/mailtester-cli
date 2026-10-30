@@ -15,6 +15,7 @@ from mailtester_cli.commands._shared import confirm, fmt_int, handle_errors
 
 VERIFY = f"{BASE_URL}/verify"
 FINDER = f"{BASE_URL}/finder/email"
+VERIFY_COST = "This will use 1 credit.\n"
 README_ORDER = ["verify", "batch", "find", "find-domain", "find-company", "lists", "credits"]
 
 runner = CliRunner()
@@ -58,7 +59,14 @@ def test_verify_human_output(respx_mock, api_key):
         "  provider    -\n"
         "  flags       accept_all\n"
     )
-    assert result.stderr == ""
+    assert result.stderr == VERIFY_COST
+
+
+def test_verify_json_still_notes_cost(respx_mock, api_key):
+    serve(respx_mock, "verify_single", VERIFY, method="POST")
+    result = runner.invoke(app, ["--json", "verify", "batch1@example.com"])
+    assert result.exit_code == 0
+    assert result.stderr == VERIFY_COST
 
 
 def test_verify_shows_suggestion_and_flags(respx_mock, api_key):
@@ -166,7 +174,7 @@ def test_api_errors(respx_mock, api_key, fixture, expected):
     assert result.stdout == ""
     if expected is None:
         expected = f"Error: {load_fixture(fixture)[2]['error']}\n"
-    assert result.stderr == expected
+    assert result.stderr == VERIFY_COST + expected
     assert "Traceback" not in result.stdout + result.stderr
     assert result.exception is None or isinstance(result.exception, SystemExit)
 
@@ -175,7 +183,7 @@ def test_missing_key(monkeypatch):
     monkeypatch.delenv("MAILTESTER_API_KEY", raising=False)
     result = runner.invoke(app, ["verify", "x@example.com"])
     assert result.exit_code == 1
-    assert result.stderr.startswith("Error: ")
+    assert result.stderr.startswith(VERIFY_COST + "Error: ")
     assert "MAILTESTER_API_KEY" in result.stderr
 
 
@@ -183,7 +191,7 @@ def test_transport_error(respx_mock, api_key):
     respx_mock.post(VERIFY).mock(side_effect=httpx.ConnectError)
     result = runner.invoke(app, ["verify", "x@example.com"])
     assert result.exit_code == 1
-    assert result.stderr.startswith("Error: Could not reach MailTester")
+    assert result.stderr.startswith(VERIFY_COST + "Error: Could not reach MailTester")
 
 
 def test_keyboard_interrupt_exits_130(capsys):

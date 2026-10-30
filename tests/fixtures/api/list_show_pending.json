@@ -1,20 +1,23 @@
 {
   "request": {
     "method": "GET",
-    "path": "/lists/1492",
+    "path": "/lists/1558",
     "params": {},
     "json": null
   },
   "status": 200,
   "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "52",
+    "x-ratelimit-reset": "1793382060",
     "content-type": "application/json"
   },
   "body": {
     "success": true,
     "data": {
-      "id": 1492,
-      "name": null,
-      "filename": "api_upload_1793280074.csv",
+      "id": 1558,
+      "name": "discovery",
+      "filename": "api_upload_1793382051.csv",
       "status": "pending",
       "progress": 0,
       "total_emails": 1,
@@ -30,10 +33,10 @@
         "free": 0
       },
       "credits_used": 1,
-      "created_at": "2026-10-29T13:21:14+00:00",
+      "created_at": "2026-10-30T17:40:51+00:00",
       "started_at": null,
       "completed_at": null
     }
   },
-  "synthetic": true
+  "synthetic": false
 }

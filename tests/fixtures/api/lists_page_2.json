@@ -10,41 +10,44 @@
   },
   "status": 200,
   "headers": {
+    "x-ratelimit-limit": "60",
+    "x-ratelimit-remaining": "56",
+    "x-ratelimit-reset": "1793382060",
     "content-type": "application/json"
   },
   "body": {
     "success": true,
     "data": [
       {
-        "id": 1457,
-        "name": "discovery",
-        "filename": "api_upload_1793234509.csv",
+        "id": 1491,
+        "name": "redacted list",
+        "filename": "api_upload_1793280019.csv",
         "status": "completed",
         "progress": 100,
-        "total_emails": 3,
-        "processed_emails": 3,
+        "total_emails": 8,
+        "processed_emails": 8,
         "results": {
-          "valid": 0,
-          "invalid": 1,
+          "valid": 1,
+          "invalid": 2,
           "unknown": 0,
-          "catch_all": 2,
-          "risky": 2,
+          "catch_all": 5,
+          "risky": 5,
           "disposable": 0,
           "role": 0,
           "free": 0
         },
-        "credits_used": 3,
-        "created_at": "2026-10-29T00:41:49+00:00",
-        "started_at": "2026-10-29T00:41:49+00:00",
-        "completed_at": "2026-10-29T00:42:16+00:00"
+        "credits_used": 8,
+        "created_at": "2026-10-29T13:20:19+00:00",
+        "started_at": "2026-10-29T13:20:19+00:00",
+        "completed_at": "2026-10-29T13:21:01+00:00"
       }
     ],
     "meta": {
       "current_page": 2,
-      "last_page": 2,
+      "last_page": 3,
       "per_page": 1,
-      "total": 2
+      "total": 3
     }
   },
-  "synthetic": true
+  "synthetic": false
 }

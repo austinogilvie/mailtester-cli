@@ -4,14 +4,14 @@
 
 Verify and find email addresses from your terminal or from Python code with the [MailTester](https://app.mailtester.com) API.
 
-> **Status: v0.1.0.** The first release. The CLI and the Python client below are both built and tested.
+> **Status: v0.2.0.** Adds `batch upload`, `batch wait`, list paging and management, and the `find-domain` and `find-company` role-mailbox finders; see the [changelog](CHANGELOG.md). The CLI and the Python client below are both built and tested.
 
 ## Install
 
 ```bash
 uv tool install git+https://github.com/austinogilvie/mailtester-cli
 # or pin this release:
-uv tool install git+https://github.com/austinogilvie/mailtester-cli@v0.1.0
+uv tool install git+https://github.com/austinogilvie/mailtester-cli@v0.2.0
 ```
 
 Or, for development:
@@ -70,6 +70,8 @@ jane@acme.com  risky  score=50
   provider    -
   flags       accept_all
 ```
+
+`verify` costs 1 credit and says so on stderr. `--timeout N` sets the server-side SMTP timeout (5–60 seconds). `--no-smtp` asks the API to skip the SMTP check, but the call still costs 1 credit and the API may check anyway.
 
 Use `--json` to get machine-readable output:
 
@@ -323,3 +325,7 @@ uv run ruff check . && uv run ruff format . && uv run pytest
 ```
 
 Tests mock all HTTP calls and never spend credits.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

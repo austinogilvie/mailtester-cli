@@ -13,5 +13,6 @@
     "success": false,
     "error": "Cannot delete a list that is still processing"
   },
-  "synthetic": true
+  "synthetic": true,
+  "note": "Synthetic by choice: provoking a 409 needs a list that is still processing, which costs 1 credit. The message is a guess; the status code comes from the API docs."
 }
