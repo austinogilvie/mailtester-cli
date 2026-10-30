@@ -11,8 +11,11 @@ from mailtester_cli.client import BASE_URL, MailTester
 
 LISTS = f"{BASE_URL}/lists"
 HEADER = "ID    NAME       STATUS     EMAILS  VALID  INVALID  RISKY  CREATED"
-ROW_1457 = "1457  discovery  completed       3      0        1      2  2026-10-29"
-ROW_1492 = "1492  -          pending         1      0        0      0  2026-10-29"
+# The NAME column is as wide as the longest name; the recorded lists are "redacted list".
+WIDE_HEADER = "ID    NAME           STATUS     EMAILS  VALID  INVALID  RISKY  CREATED"
+ROW_PAGE_2 = "1491  redacted list  completed       8      1        2      5  2026-10-29"
+ROW_COMPLETED = "1498  redacted list  completed       2      0        2      0  2026-10-29"
+ROW_PENDING = "1558  discovery      pending         1      0        0      0  2026-10-30"
 OPTIONS_ERROR = "Error: --page, --per-page, and --all apply to `mailtester lists` only.\n"
 
 runner = CliRunner()
@@ -48,11 +51,11 @@ def serve_page(respx_mock, body: dict, params: dict[str, str] | None = None):
     return respx_mock.get(LISTS, **patterns).respond(200, json=body)
 
 
-def item_1457() -> dict:
+def item_completed() -> dict:
     return fixture_data("list_show")
 
 
-def item_1492() -> dict:
+def item_pending() -> dict:
     return fixture_data("list_show_pending")
 
 
@@ -66,25 +69,25 @@ def serve_deleted(respx_mock, list_id: int):
     )
 
 
-SHOW_1457 = (
-    "List 1457  discovery  completed  100%  (3/3)\n"
+SHOW_COMPLETED = (
+    "List 1498  redacted list  completed  100%  (2/2)\n"
     "  valid       0\n"
-    "  invalid     1\n"
-    "  risky       2\n"
+    "  invalid     2\n"
+    "  risky       0\n"
     "  unknown     0\n"
-    "  credits     3\n"
-    "  created     2026-10-29 00:41:49 UTC\n"
-    "  started     2026-10-29 00:41:49 UTC\n"
-    "  completed   2026-10-29 00:42:16 UTC\n"
+    "  credits     2\n"
+    "  created     2026-10-29 14:56:13 UTC\n"
+    "  started     2026-10-29 14:56:13 UTC\n"
+    "  completed   2026-10-29 14:56:39 UTC\n"
 )
-SHOW_1492 = (
-    "List 1492  -  pending  0%  (0/1)\n"
+SHOW_PENDING = (
+    "List 1558  -  pending  0%  (0/1)\n"
     "  valid       0\n"
     "  invalid     0\n"
     "  risky       0\n"
     "  unknown     0\n"
     "  credits     1\n"
-    "  created     2026-10-29 13:21:14 UTC\n"
+    "  created     2026-10-30 17:40:51 UTC\n"
     "  started     -\n"
     "  completed   -\n"
 )
@@ -158,8 +161,8 @@ def test_lists_page_sends_page(respx_mock, api_key):
     route = serve(respx_mock, "lists_page_2", LISTS, params__eq={"per_page": "1", "page": "2"})
     result = runner.invoke(app, ["lists", "--per-page", "1", "--page", "2"])
     assert result.exit_code == 0
-    assert result.stdout == f"{HEADER}\n{ROW_1457}\n"
-    assert result.stderr == ""
+    assert result.stdout == f"{WIDE_HEADER}\n{ROW_PAGE_2}\n"
+    assert result.stderr == "Page 2 of 3 (3 lists). Use --page 3 or --all for more.\n"
     assert route.called
 
 
@@ -171,10 +174,10 @@ def test_lists_single_page_has_no_hint(respx_mock, api_key):
 
 
 def test_lists_page_hint_on_stderr(respx_mock, api_key):
-    route = serve_page(respx_mock, page_body([item_1457()], last_page=3, total=57))
+    route = serve_page(respx_mock, page_body([item_completed()], last_page=3, total=57))
     result = runner.invoke(app, ["lists"])
     assert result.exit_code == 0
-    assert result.stdout == f"{HEADER}\n{ROW_1457}\n"
+    assert result.stdout == f"{WIDE_HEADER}\n{ROW_COMPLETED}\n"
     assert result.stderr == "Page 1 of 3 (57 lists). Use --page 2 or --all for more.\n"
     assert route.calls.last.request.url.query == b""
 
@@ -182,7 +185,7 @@ def test_lists_page_hint_on_stderr(respx_mock, api_key):
 def test_lists_hint_names_next_page(respx_mock, api_key):
     serve_page(
         respx_mock,
-        page_body([item_1457()], current_page=2, last_page=3, total=1234),
+        page_body([item_completed()], current_page=2, last_page=3, total=1234),
         params={"page": "2"},
     )
     result = runner.invoke(app, ["lists", "--page", "2"])
@@ -193,34 +196,34 @@ def test_lists_hint_names_next_page(respx_mock, api_key):
 def test_lists_last_page_has_no_hint(respx_mock, api_key):
     serve_page(
         respx_mock,
-        page_body([item_1457()], current_page=3, last_page=3, total=57),
+        page_body([item_completed()], current_page=3, last_page=3, total=57),
         params={"page": "3"},
     )
     result = runner.invoke(app, ["lists", "--page", "3"])
     assert result.exit_code == 0
-    assert result.stdout == f"{HEADER}\n{ROW_1457}\n"
+    assert result.stdout == f"{WIDE_HEADER}\n{ROW_COMPLETED}\n"
     assert result.stderr == ""
 
 
 def test_lists_json_prints_rows_and_keeps_hint(respx_mock, api_key):
-    serve_page(respx_mock, page_body([item_1457()], last_page=3, total=57))
+    serve_page(respx_mock, page_body([item_completed()], last_page=3, total=57))
     result = runner.invoke(app, ["--json", "lists"])
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == [item_1457()]
+    assert json.loads(result.stdout) == [item_completed()]
     assert result.stderr == "Page 1 of 3 (57 lists). Use --page 2 or --all for more.\n"
 
 
 def test_lists_past_last_page(respx_mock, api_key):
-    serve(respx_mock, "lists_past_last_page", LISTS, params__eq={"per_page": "1", "page": "3"})
-    result = runner.invoke(app, ["lists", "--per-page", "1", "--page", "3"])
+    serve(respx_mock, "lists_past_last_page", LISTS, params__eq={"per_page": "1", "page": "4"})
+    result = runner.invoke(app, ["lists", "--per-page", "1", "--page", "4"])
     assert result.exit_code == 0
-    assert result.stdout == "No lists on page 3 (last page is 2).\n"
+    assert result.stdout == "No lists on page 4 (last page is 3).\n"
     assert result.stderr == ""
 
 
 def test_lists_past_last_page_json_prints_empty_list(respx_mock, api_key):
-    serve(respx_mock, "lists_past_last_page", LISTS, params__eq={"per_page": "1", "page": "3"})
-    result = runner.invoke(app, ["--json", "lists", "--per-page", "1", "--page", "3"])
+    serve(respx_mock, "lists_past_last_page", LISTS, params__eq={"per_page": "1", "page": "4"})
+    result = runner.invoke(app, ["--json", "lists", "--per-page", "1", "--page", "4"])
     assert result.exit_code == 0
     assert json.loads(result.stdout) == []
     assert result.stderr == ""
@@ -240,12 +243,12 @@ def _all_routes(respx_mock, per_page: int):
     size = str(per_page)
     p1 = serve_page(
         respx_mock,
-        page_body([item_1492()], last_page=2, per_page=per_page, total=2),
+        page_body([item_pending()], last_page=2, per_page=per_page, total=2),
         params={"per_page": size, "page": "1"},
     )
     p2 = serve_page(
         respx_mock,
-        page_body([item_1457()], current_page=2, last_page=2, per_page=per_page, total=2),
+        page_body([item_completed()], current_page=2, last_page=2, per_page=per_page, total=2),
         params={"per_page": size, "page": "2"},
     )
     return p1, p2
@@ -255,7 +258,7 @@ def test_lists_all_walks_pages(respx_mock, api_key):
     p1, p2 = _all_routes(respx_mock, 100)
     result = runner.invoke(app, ["lists", "--all"])
     assert result.exit_code == 0
-    assert result.stdout == f"{HEADER}\n{ROW_1492}\n{ROW_1457}\n"
+    assert result.stdout == f"{WIDE_HEADER}\n{ROW_PENDING}\n{ROW_COMPLETED}\n"
     assert result.stderr == ""
     assert p1.call_count == 1 and p2.call_count == 1
 
@@ -264,7 +267,7 @@ def test_lists_all_uses_per_page(respx_mock, api_key):
     p1, p2 = _all_routes(respx_mock, 1)
     result = runner.invoke(app, ["lists", "--all", "--per-page", "1"])
     assert result.exit_code == 0
-    assert result.stdout == f"{HEADER}\n{ROW_1492}\n{ROW_1457}\n"
+    assert result.stdout == f"{WIDE_HEADER}\n{ROW_PENDING}\n{ROW_COMPLETED}\n"
     assert p1.call_count == 1 and p2.call_count == 1
 
 
@@ -272,7 +275,7 @@ def test_lists_all_json_concatenates_rows(respx_mock, api_key):
     _all_routes(respx_mock, 100)
     result = runner.invoke(app, ["--json", "lists", "--all"])
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == [item_1492(), item_1457()]
+    assert json.loads(result.stdout) == [item_pending(), item_completed()]
     assert result.stderr == ""
 
 
@@ -310,22 +313,24 @@ def test_lists_options_before_subcommand_are_rejected(api_key, guard, opts):
 
 
 def test_lists_show_human(respx_mock, api_key):
-    serve(respx_mock, "list_show", f"{LISTS}/1457")
-    result = runner.invoke(app, ["lists", "show", "1457"])
+    serve(respx_mock, "list_show", f"{LISTS}/1498")
+    result = runner.invoke(app, ["lists", "show", "1498"])
     assert result.exit_code == 0
-    assert result.stdout == SHOW_1457
+    assert result.stdout == SHOW_COMPLETED
     assert result.stderr == ""
 
 
 def test_lists_show_pending_prints_dashes(respx_mock, api_key):
-    serve(respx_mock, "list_show_pending", f"{LISTS}/1492")
-    result = runner.invoke(app, ["lists", "show", "1492"])
+    data = item_pending()
+    data["name"] = None  # an upload without --name has no name
+    respond(respx_mock, f"{LISTS}/1558", data)
+    result = runner.invoke(app, ["lists", "show", "1558"])
     assert result.exit_code == 0
-    assert result.stdout == SHOW_1492
+    assert result.stdout == SHOW_PENDING
 
 
 def test_lists_show_fractional_progress_and_commas(respx_mock, api_key):
-    data = item_1457()
+    data = item_completed()
     data.update(
         status="processing",
         progress=12.5,
@@ -334,11 +339,11 @@ def test_lists_show_fractional_progress_and_commas(respx_mock, api_key):
         created_at="2026-10-01T23:30:00-02:00",
     )
     data["results"]["valid"] = 1000
-    respond(respx_mock, f"{LISTS}/1457", data)
-    result = runner.invoke(app, ["lists", "show", "1457"])
+    respond(respx_mock, f"{LISTS}/1498", data)
+    result = runner.invoke(app, ["lists", "show", "1498"])
     assert result.exit_code == 0
     assert result.stdout.splitlines()[:2] == [
-        "List 1457  discovery  processing  12.5%  (675/5,400)",
+        "List 1498  redacted list  processing  12.5%  (675/5,400)",
         "  valid       1,000",
     ]
     assert result.stdout.splitlines()[6] == "  created     2026-10-02 01:30:00 UTC"
@@ -348,7 +353,7 @@ def test_lists_show_json(respx_mock, api_key):
     serve(respx_mock, "list_show", f"{LISTS}/1457")
     result = runner.invoke(app, ["--json", "lists", "show", "1457"])
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == item_1457()
+    assert json.loads(result.stdout) == item_completed()
     assert result.stderr == ""
 
 

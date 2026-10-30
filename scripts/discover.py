@@ -617,6 +617,17 @@ def run_list_pages(rec: Recorder, lists_resp: httpx.Response) -> None:
     rec.call("2b", "lists_past_last_page", "GET", "/lists", params=params, scrub_names=True)
 
 
+def run_list_show(rec: Recorder, lists_resp: httpx.Response) -> None:
+    """Step 2c: GET /lists/{id} on the first `completed` list in step 2, so no id is hardcoded."""
+    try:
+        rows = lists_resp.json()["data"]
+        list_id = next(r["id"] for r in rows if r.get("status") == "completed")
+    except (ValueError, KeyError, TypeError, AttributeError, StopIteration):
+        print("[ 2c] skipped list_show: step 2 had no completed list")
+        return
+    rec.call("2c", "list_show", "GET", f"/lists/{list_id}", scrub_names=True)
+
+
 def run_errors(rec: Recorder) -> None:
     bad_key = httpx.Client(base_url=BASE_URL, headers={"Authorization": "Bearer evp_invalid"})
     with bad_key:
@@ -811,6 +822,7 @@ def main(argv: list[str] | None = None) -> int:
         params = {"per_page": 5}
         lists_resp = rec.call("2", "lists", "GET", "/lists", params=params, scrub_names=True)
         run_list_pages(rec, lists_resp)
+        run_list_show(rec, lists_resp)
         # The probes are free, but they only matter when a role finder is about to be called.
         fields = run_finder_probes(rec) if finder_cost(args) else dict(FINDER_FIELDS)
         batch_id = args.batch_id

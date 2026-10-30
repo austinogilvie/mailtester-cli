@@ -291,8 +291,8 @@ def test_lists_page_sends_page_and_per_page(respx_mock, mt):
     params = dict(route.calls.last.request.url.params)
     assert params == {k: str(v) for k, v in load_request("lists_page_2")["params"].items()}
     assert isinstance(page, ListPage)
-    assert (page.current_page, page.last_page, page.per_page, page.total) == (2, 2, 1, 2)
-    assert [j.id for j in page.items] == [1457]
+    assert (page.current_page, page.last_page, page.per_page, page.total) == (2, 3, 1, 3)
+    assert [j.id for j in page.items] == [1491]
 
 
 def test_lists_page_without_params_sends_no_query(respx_mock, mt):
@@ -306,7 +306,7 @@ def test_lists_sends_page(respx_mock, mt):
     jobs = mt.lists(page=2, per_page=1)
     assert isinstance(jobs, list)
     assert all(isinstance(j, ListJob) for j in jobs)
-    assert [j.id for j in jobs] == [1457]
+    assert [j.id for j in jobs] == [1491]
     assert dict(route.calls.last.request.url.params) == {"per_page": "1", "page": "2"}
 
 
@@ -319,12 +319,12 @@ def test_lists_page_without_meta_raises(respx_mock, mt):
 
 
 def test_lists_past_last_page(respx_mock, mt):
-    serve(respx_mock, "lists_past_last_page", LISTS, params__eq={"per_page": "1", "page": "3"})
-    page = mt.lists_page(page=3, per_page=1)
+    serve(respx_mock, "lists_past_last_page", LISTS, params__eq={"per_page": "1", "page": "4"})
+    page = mt.lists_page(page=4, per_page=1)
     assert page.items == []
-    assert page.current_page == 3
-    assert page.last_page == 2
-    assert page.total == 2
+    assert page.current_page == 4
+    assert page.last_page == 3
+    assert page.total == 3
 
 
 def test_iter_lists_walks_every_page(respx_mock, mt):
@@ -388,13 +388,13 @@ def test_iter_lists_uses_page_one_last_page(respx_mock, mt):
 
 
 def test_get_list_parses_item(respx_mock, mt):
-    route = serve(respx_mock, "list_show", f"{LISTS}/1457")
-    job = mt.get_list(1457)
+    route = serve(respx_mock, "list_show", f"{LISTS}/1498")
+    job = mt.get_list(1498)
     assert isinstance(job, ListJob)
-    assert job.id == 1457
-    assert job.name == "discovery"
-    assert job.results.risky == 2
-    assert job.credits_used == 3
+    assert job.id == 1498
+    assert job.name == "redacted list"
+    assert job.results.invalid == 2
+    assert job.credits_used == 2
     assert job.completed_at.tzinfo is not None
     request = route.calls.last.request
     assert request.method == "GET"
@@ -403,14 +403,14 @@ def test_get_list_parses_item(respx_mock, mt):
 
 
 def test_get_list_pending_has_null_timestamps(respx_mock, mt):
-    serve(respx_mock, "list_show_pending", f"{LISTS}/1492")
-    job = mt.get_list(1492)
+    serve(respx_mock, "list_show_pending", f"{LISTS}/1558")
+    job = mt.get_list(1558)
     assert job.status == "pending"
     assert job.progress == 0
     assert job.started_at is None
     assert job.completed_at is None
     assert job.credits_used == 1
-    assert job.name is None
+    assert job.name == "discovery"
 
 
 def test_get_list_not_found(respx_mock, mt):

@@ -113,9 +113,15 @@ def test_free_run_writes_redacted_fixtures(respx_mock, monkeypatch, tmp_path):
         200,
         json={
             "success": True,
-            "data": [{"id": 1, "name": "Client leads"}],
+            "data": [
+                {"id": 1, "name": "Client leads", "status": "processing"},
+                {"id": 2, "name": "Old leads", "status": "completed"},
+            ],
             "meta": {"current_page": 1, "last_page": 2, "per_page": 5, "total": 7},
         },
+    )
+    respx_mock.get("/lists/2").respond(
+        200, json={"success": True, "data": {"id": 2, "name": "Old leads", "status": "completed"}}
     )
     respx_mock.get("/verify/batch/999999999").respond(
         404, json={"success": False, "error": "List not found"}
@@ -137,10 +143,14 @@ def test_free_run_writes_redacted_fixtures(respx_mock, monkeypatch, tmp_path):
         "error_404.json",
         "error_404_list.json",
         "error_422.json",
+        "list_show.json",
         "lists.json",
         "lists_page_2.json",
         "lists_past_last_page.json",
     ]
+    shown = json.loads((tmp_path / "list_show.json").read_text())
+    assert shown["request"]["path"] == "/lists/2"
+    assert shown["body"]["data"]["name"] == "redacted list"
     page_2 = json.loads((tmp_path / "lists_page_2.json").read_text())
     assert page_2["request"]["params"] == {"per_page": 1, "page": 2}
     past = json.loads((tmp_path / "lists_past_last_page.json").read_text())
@@ -586,6 +596,18 @@ def test_list_pages_skipped_without_meta(respx_mock, monkeypatch, tmp_path, caps
     assert not (tmp_path / "lists_page_2.json").exists()
     assert not (tmp_path / "lists_past_last_page.json").exists()
     assert "[ 2b] skipped lists_past_last_page: step 2 had no meta.total" in capsys.readouterr().out
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_list_show_skipped_without_a_completed_list(respx_mock, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(discover, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_realkey123")
+    free_routes(respx_mock)  # its /lists body has no rows
+
+    assert discover.main(["--out", str(tmp_path)]) == 0
+
+    assert not (tmp_path / "list_show.json").exists()
+    assert "[ 2c] skipped list_show: step 2 had no completed list" in capsys.readouterr().out
 
 
 @respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
