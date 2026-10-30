@@ -17,7 +17,8 @@ src/mailtester_cli/
   commands/
     __init__.py # empty
     _shared.py  # State, client(), handle_errors, confirm, print_json, fmt_int, fail
-    verify.py   # verify
+    _input.py   # read_addresses (args + file/stdin, dedupe), confirm_spend, CONFIRM_THRESHOLD
+    verify.py   # verify (one address or many)
     finder.py   # find, find-domain, find-company
     account.py  # credits
     lists.py    # the lists group: the table, lists show, lists delete
@@ -34,7 +35,7 @@ tests/          # pytest suite, never hits the live API
   test_cli_account.py      # credits
   test_cli_lists.py        # lists, --page/--per-page/--all, lists show, lists delete
   test_cli_batch.py        # batch submit/upload/status/wait/results, --wait and wait with a fake clock
-  fixtures/api/ # redacted live responses, plus synthetic 402/429/500/502
+  fixtures/api/ # redacted live responses, plus synthetic 402/429/500/502 and the verify 422
 scripts/
   discover.py   # recaptures the fixtures (paid calls need --spend)
 ```
@@ -61,7 +62,7 @@ Planned work is tracked as GitHub Issues on `austinogilvie/mailtester-cli`, view
 
 | Command | Method + path | Scope | Cost |
 |---|---|---|---|
-| `verify <email>` | `POST /verify` with `email`, plus optional `timeout` (5–60s, default 30) and `smtp_check` (default true) | `verify:single` | 1 credit |
+| `verify <email>...` / `--file` | `POST /verify` once per address, in order, with `email`, plus optional `timeout` (5–60s, default 30) and `smtp_check` (default true) | `verify:single` | 1 credit |
 | `batch submit <file>` | `POST /verify/batch` with `emails[]` (1–10,000), plus optional `name`, `callback_url`, `auto_start` (default true). Returns `201` with `data: {id, status, total_emails, created_at}`. | `verify:batch` | 1 credit per email |
 | `batch upload <file>` | `POST /verify/batch/upload`, multipart with the file in a part named `file` (CSV, TXT, or XLSX, max 10 MB), plus optional form fields `name`, `callback_url`, `auto_start` (`"1"`/`"0"`). Returns `data: {id, status, total_emails, created_at}` like `batch submit`. Returns `201`. `total_emails` is set in the response. A header row is detected, the email column is found by header or content rather than position, and `.xlsx` is parsed. | `verify:batch` | 1 credit per email |
 | `batch status <id>` | `GET /verify/batch/{id}`. Returns `status`, `progress` (0–100, can be fractional, e.g. `12.5`), `total_emails`, `processed_emails`, `valid_emails`, `invalid_emails`, `unknown_emails`, `completed_at`. There's no risky count. | `verify:batch` | free |
@@ -102,7 +103,7 @@ Show the raw values, and don't try to make the two match. Disposable addresses c
 - `400` batch results requested before completion · `401` bad key · `402` insufficient credits (`available_credits`) · `404` not found · `409` conflict · `422` validation · `429` rate limited (`retry_after`) · `500` engine error · `502` upstream unavailable.
 - `404` messages depend on the resource, for example `"Bulk verification not found"` for a batch and `"List not found"` for a list. Show the message from the API instead of hardcoding one.
 - `422` usually carries an `errors` map keyed by field (`email`, `timeout`, `emails.0`, `emails.1`, ...), but the finder's no-MX case carries a plain `error` string instead. Handle both.
-- Only `401`, `404`, `422`, and `400` have been captured live. The `402`, `429`, `500`, and `502` fixtures are built from the docs, and the units of `retry_after` are assumed to be seconds.
+- Only `401`, `404`, `422`, and `400` have been captured live. The `402`, `429`, `500`, and `502` fixtures are built from the docs, `error_422_email` (a malformed address to `POST /verify`) is built from Laravel's wording until `discover.py --verify-email` records it (step 3p), and the units of `retry_after` are assumed to be seconds.
 - The default rate limit is 60 requests/min per key, but a key's window can be per minute, hour, or day. Responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`. `X-RateLimit-Reset` is a Unix timestamp, and it's missing on `401` responses.
 - The client retries a `429` after `retry_after` (then the seconds until `X-RateLimit-Reset`, then a 1, 2, 4... backoff), connection failures, and `5xx` on `GET`/`DELETE`, at most `max_retries` (2) times and `max_retry_wait` (60s) in total, in `_request`. Commands never add retry loops; a `POST` is never replayed after a `5xx` or a read timeout. The CLI prints one stderr line per retry through `on_retry`.
 
@@ -110,7 +111,8 @@ Show the raw values, and don't try to make the two match. Disposable addresses c
 
 - Human-readable output by default. A `--json` flag prints the raw `data` payload for piping to `jq`.
 - Send errors to stderr and exit non-zero. Print the API's error message instead of a stack trace.
-- Commands that spend credits should say what they will cost. For large batches, ask for confirmation unless `--yes` is passed.
+- Every command that spends credits says what it will cost on stderr. At 100 addresses or more (`CONFIRM_THRESHOLD`), `verify` and `batch submit` ask for confirmation unless `--yes` is passed.
+- Commands that read many addresses (`verify`, `batch submit`) go through `read_addresses`, which drops case-insensitive repeats so a repeat never costs a second credit.
 - Keep the HTTP client in one module, separate from command definitions, so commands stay thin.
 
 ## Development

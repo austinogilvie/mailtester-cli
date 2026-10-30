@@ -1053,3 +1053,52 @@ def test_unreadable_balance_mid_run_stops(respx_mock, monkeypatch, tmp_path, cap
     assert domain.call_count == 1 and company.call_count == 1
     assert "STOPPED: step 4c: the balance couldn't be read" in capsys.readouterr().err
     assert (tmp_path / "credits_after.json").exists()
+
+
+def verify_probe_routes(respx_mock, probe_status: int = 422):
+    """The malformed-address probe (step 3p) and the paid verify (step 3) behind it."""
+    errors = {"email": ["The email field must be a valid email address."]}
+    probe = respx_mock.post("/verify", json__eq=discover.VERIFY_PROBE).respond(
+        probe_status, json={"success": False, "errors": errors}
+    )
+    data = {"email": "me@personal.dev", "result": "risky", "reason": "CATCH_ALL", "score": 50}
+    paid = respx_mock.post("/verify").respond(200, json={"success": True, "data": data})
+    return probe, paid
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_verify_probe_records_error_422_email(respx_mock, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(discover, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_realkey123")
+    respx_mock.get("/credits").respond(200, json={"success": True, "data": {"balance": 59}})
+    respx_mock.get("/lists").respond(200, json={"success": True, "data": []})
+    respx_mock.get(url__regex=r".*/999999999$").respond(404, json={"success": False})
+    respx_mock.post("/verify/batch").respond(422, json={"success": False, "errors": {}})
+    probe, paid = verify_probe_routes(respx_mock)
+
+    argv = ["--spend", "--verify-email", "me@personal.dev", "--out", str(tmp_path)]
+    assert discover.main(argv) == 0
+    assert probe.call_count == 1 and paid.call_count == 1
+    recorded = json.loads((tmp_path / "error_422_email.json").read_text())
+    assert recorded["status"] == 422
+    assert recorded["request"]["json"] == discover.VERIFY_PROBE
+    assert list(recorded["body"]["errors"]) == ["email"]
+    assert "[ 3p] GET /credits -> balance 59 (step 0)" in capsys.readouterr().out
+
+
+@respx.mock(base_url=discover.BASE_URL, assert_all_called=False)
+def test_verify_probe_other_status_is_not_saved(respx_mock, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(discover, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_realkey123")
+    respx_mock.get("/credits").respond(200, json={"success": True, "data": {}})
+    respx_mock.get("/lists").respond(200, json={"success": True, "data": []})
+    respx_mock.get(url__regex=r".*/999999999$").respond(404, json={"success": False})
+    respx_mock.post("/verify/batch").respond(422, json={"success": False, "errors": {}})
+    verify_probe_routes(respx_mock, probe_status=200)
+
+    argv = ["--spend", "--verify-email", "me@personal.dev", "--out", str(tmp_path)]
+    assert discover.main(argv) == 0
+    assert not (tmp_path / "error_422_email.json").exists()
+    out = capsys.readouterr().out
+    assert "[ 3p] expected 422 from a malformed address, got 200; not saved" in out
+    assert "[ 3p] GET /credits -> balance unknown; the cost isn't checked" in out

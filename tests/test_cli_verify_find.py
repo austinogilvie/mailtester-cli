@@ -108,6 +108,309 @@ def test_verify_rejects_out_of_range_timeout(api_key):
     assert result.exit_code == 2
 
 
+# verify many
+
+THREE = ["batch1@example.com", "nobody@freemail.example", "nobody@nomx.invalid"]
+THREE_LINES = [
+    "batch1@example.com       risky    score=50   CATCH_ALL",
+    "nobody@freemail.example  invalid  score=0    INVALID",
+    "nobody@nomx.invalid      invalid  score=0    NO_MX_RECORD",
+]
+
+
+def fixture_response(name: str) -> httpx.Response:
+    status, headers, body = load_fixture(name)
+    return httpx.Response(status, headers=headers, json=body)
+
+
+def verdict(email: str, name: str = "verify_single") -> httpx.Response:
+    """A 200 for `email`: the fixture's data with the address swapped in."""
+    data = fixture_data(name) | {"email": email}
+    return httpx.Response(200, json={"success": True, "data": data})
+
+
+def three_verdicts() -> list[httpx.Response]:
+    names = ["verify_single", "verify_invalid", "verify_no_mx"]
+    return [verdict(email, name) for email, name in zip(THREE, names, strict=True)]
+
+
+def many(n: int) -> list[str]:
+    return [f"user{i}@example.com" for i in range(n)]
+
+
+def write_emails(tmp_path, lines: list[str]) -> str:
+    path = tmp_path / "emails.txt"
+    path.write_text("\n".join(lines) + "\n")
+    return str(path)
+
+
+@pytest.fixture
+def guard(respx_mock):
+    """A catch-all route: any request at all shows up as guard.called."""
+    return respx_mock.route().respond(500)
+
+
+def test_verify_single_prints_cost_note(respx_mock, api_key):
+    serve(respx_mock, "verify_single", VERIFY, method="POST")
+    result = runner.invoke(app, ["verify", "batch1@example.com"])
+    assert result.stdout.startswith("batch1@example.com  risky  score=50\n")
+    assert result.stderr == "This will use 1 credit.\n"
+
+
+def test_verify_many_lines(respx_mock, api_key):
+    route = respx_mock.post(VERIFY).mock(side_effect=three_verdicts())
+    result = runner.invoke(app, ["verify", *THREE])
+    assert result.exit_code == 0
+    assert result.stdout.splitlines() == THREE_LINES
+    assert result.stderr == "This will use 3 credits.\n"
+    assert [json.loads(c.request.content)["email"] for c in route.calls] == THREE
+
+
+def test_verify_many_json_lines(respx_mock, api_key):
+    respx_mock.post(VERIFY).mock(side_effect=three_verdicts())
+    result = runner.invoke(app, ["--json", "verify", *THREE])
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert len(lines) == 3
+    assert [json.loads(line)["result"] for line in lines] == ["risky", "invalid", "invalid"]
+    assert json.loads(lines[1]) == fixture_data("verify_invalid")
+    assert all(line.startswith('{"email": ') for line in lines)  # one object per line
+
+
+def test_verify_file_and_args_combine(respx_mock, api_key, tmp_path):
+    route = respx_mock.post(VERIFY).mock(side_effect=three_verdicts())
+    path = write_emails(tmp_path, ["", f"  {THREE[1]}", THREE[2]])
+    result = runner.invoke(app, ["verify", THREE[0], "--file", path])
+    assert result.exit_code == 0
+    assert [json.loads(c.request.content)["email"] for c in route.calls] == THREE
+    assert result.stdout.splitlines() == THREE_LINES
+
+
+def test_verify_file_stdin(respx_mock, api_key):
+    route = respx_mock.post(VERIFY).mock(side_effect=three_verdicts())
+    stdin = ("﻿" + "\n".join(THREE) + "\n").encode("utf-8")
+    result = runner.invoke(app, ["verify", "--file", "-"], input=stdin)
+    assert result.exit_code == 0
+    assert [json.loads(c.request.content)["email"] for c in route.calls] == THREE
+
+
+def test_verify_one_line_file_prints_the_full_result(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "verify_single", VERIFY, method="POST")
+    path = write_emails(tmp_path, ["batch1@example.com"])
+    result = runner.invoke(app, ["--json", "verify", "--file", path])
+    assert result.exit_code == 0
+    assert result.stdout.startswith("{\n")
+    assert json.loads(result.stdout) == fixture_data("verify_single")
+
+
+def test_verify_dedupes_before_cost(respx_mock, api_key):
+    route = serve(respx_mock, "verify_single", VERIFY, method="POST")
+    result = runner.invoke(app, ["verify", "a@x.example", "A@X.EXAMPLE"])
+    assert result.exit_code == 0
+    assert route.call_count == 1
+    assert sent_json(route) == {"email": "a@x.example"}
+    assert result.stderr == "Skipped 1 duplicate.\nThis will use 1 credit.\n"
+    assert result.stdout.endswith("  flags       accept_all\n")  # the one-address output
+
+
+def test_verify_no_input_is_usage_error(respx_mock, guard, api_key):
+    result = runner.invoke(app, ["verify"])
+    assert result.exit_code == 2
+    assert result.stderr == "Error: Give at least one address or --file.\n"
+    assert not guard.called
+
+
+def test_verify_empty_file(respx_mock, guard, api_key, tmp_path):
+    path = write_emails(tmp_path, ["", "  "])
+    result = runner.invoke(app, ["verify", "--file", path])
+    assert result.exit_code == 1
+    assert result.stderr == f"Error: No email addresses in {path}.\n"
+    assert not guard.called
+
+
+def test_verify_missing_file(respx_mock, guard, api_key, tmp_path):
+    path = tmp_path / "nope.txt"
+    result = runner.invoke(app, ["verify", "--file", str(path)])
+    assert result.exit_code == 1
+    assert result.stderr == f"Error: File not found: {path}\n"
+    assert not guard.called
+
+
+TIP = (
+    "Tip: 100 addresses take about 2 minutes one at a time; "
+    "batch submit is faster for a list this size.\n"
+)
+
+
+def test_verify_confirm_at_threshold(respx_mock, guard, api_key, tmp_path):
+    path = write_emails(tmp_path, many(100))
+    result = runner.invoke(app, ["verify", "--file", path], input="n\n")
+    assert result.exit_code == 1
+    assert result.stderr.startswith("This will use 100 credits.\n" + TIP + "Continue? [y/N]:")
+    assert result.stderr.endswith("Aborted.\n")
+    assert result.stdout == ""
+    assert not guard.called
+
+
+def test_verify_confirm_accepted(respx_mock, api_key, tmp_path):
+    route = respx_mock.post(VERIFY).mock(side_effect=[verdict(e) for e in many(100)])
+    path = write_emails(tmp_path, many(100))
+    result = runner.invoke(app, ["verify", "--file", path], input="y\n")
+    assert result.exit_code == 0
+    assert route.call_count == 100
+    assert len(result.stdout.splitlines()) == 100
+
+
+@pytest.mark.parametrize("flag", ["--yes", "-y"])
+def test_verify_yes_skips_prompt_and_tip(respx_mock, api_key, tmp_path, flag):
+    respx_mock.post(VERIFY).mock(side_effect=[verdict(e) for e in many(100)])
+    result = runner.invoke(app, ["verify", "--file", write_emails(tmp_path, many(100)), flag])
+    assert result.exit_code == 0
+    assert result.stderr == "This will use 100 credits.\n"
+
+
+def test_verify_below_threshold_has_no_prompt_or_tip(respx_mock, api_key):
+    respx_mock.post(VERIFY).mock(side_effect=[verdict(e) for e in many(99)])
+    result = runner.invoke(app, ["verify", *many(99)])
+    assert result.exit_code == 0
+    assert result.stderr == "This will use 99 credits.\n"
+
+
+def test_verify_stdin_requires_yes(respx_mock, guard, api_key):
+    result = runner.invoke(app, ["verify", "--file", "-"], input="\n".join(many(100)))
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "This will use 100 credits.\n"
+        + TIP
+        + "Error: Pass --yes to confirm spending 100 credits when reading from stdin.\n"
+    )
+    assert not guard.called
+
+
+def test_verify_422_continues(respx_mock, api_key):
+    addresses = [THREE[0], "nobody@", THREE[2]]
+    respx_mock.post(VERIFY).mock(
+        side_effect=[
+            verdict(THREE[0]),
+            fixture_response("error_422_email"),
+            verdict(THREE[2], "verify_no_mx"),
+        ]
+    )
+    result = runner.invoke(app, ["verify", *addresses])
+    assert result.exit_code == 1
+    assert result.stdout.splitlines() == [
+        "batch1@example.com   risky    score=50   CATCH_ALL",
+        "nobody@nomx.invalid  invalid  score=0    NO_MX_RECORD",
+    ]
+    assert result.stderr == (
+        "This will use 3 credits.\n"
+        "Error: nobody@: email: The email field must be a valid email address.\n"
+    )
+
+
+def test_verify_422_single_has_no_prefix(respx_mock, api_key):
+    serve(respx_mock, "error_422_email", VERIFY, method="POST")
+    result = runner.invoke(app, ["verify", "nobody@"])
+    assert result.exit_code == 1
+    assert result.stderr == (
+        VERIFY_COST + "Error: email: The email field must be a valid email address.\n"
+    )
+
+
+def test_verify_402_stops(respx_mock, api_key):
+    route = respx_mock.post(VERIFY).mock(
+        side_effect=[verdict(THREE[0]), fixture_response("error_402"), verdict(THREE[2])]
+    )
+    result = runner.invoke(app, ["verify", *THREE])
+    assert result.exit_code == 1
+    assert result.stdout == THREE_LINES[0] + "\n"
+    assert result.stderr.endswith(
+        "Error: Insufficient credits (available credits: 0)\n"
+        "Verified 1 of 3 addresses; stopped at nobody@freemail.example, 1 not sent.\n"
+    )
+    assert route.call_count == 2
+
+
+def test_verify_stop_after_a_422_counts_only_verdicts(respx_mock, api_key):
+    respx_mock.post(VERIFY).mock(
+        side_effect=[fixture_response("error_422_email"), fixture_response("error_401")]
+    )
+    result = runner.invoke(app, ["verify", "nobody@", *THREE])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.endswith(
+        "Error: Invalid API key\n"
+        "Verified 0 of 4 addresses; stopped at batch1@example.com, 2 not sent.\n"
+    )
+
+
+def test_verify_stop_at_the_last_address(respx_mock, api_key):
+    respx_mock.post(VERIFY).mock(side_effect=[*three_verdicts()[:2], fixture_response("error_500")])
+    result = runner.invoke(app, ["verify", *THREE])
+    assert result.exit_code == 1
+    assert result.stdout.splitlines() == THREE_LINES[:2]
+    assert result.stderr.endswith("Verified 2 of 3 addresses; stopped at nobody@nomx.invalid.\n")
+
+
+def test_verify_429_stops_after_the_client_retries(respx_mock, api_key, clock):
+    respx_mock.post(VERIFY).mock(
+        side_effect=[verdict(THREE[0])] + [fixture_response("error_429")] * 3
+    )
+    result = runner.invoke(app, ["verify", *THREE])
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "This will use 3 credits.\n"
+        + "Rate limited, retrying in 30s...\n" * 2
+        + "Error: Rate limit exceeded. Retry in 30s.\n"
+        + "Verified 1 of 3 addresses; stopped at nobody@freemail.example, 1 not sent.\n"
+    )
+    assert clock.sleeps == [30, 30]
+
+
+def test_verify_many_rides_out_a_429(respx_mock, api_key, clock):
+    responses = three_verdicts()
+    responses.insert(1, fixture_response("error_429"))
+    respx_mock.post(VERIFY).mock(side_effect=responses)
+    result = runner.invoke(app, ["verify", *THREE])
+    assert result.exit_code == 0
+    assert result.stdout.splitlines() == THREE_LINES
+    assert result.stderr == "This will use 3 credits.\nRate limited, retrying in 30s...\n"
+
+
+def test_verify_interrupt_reports_count(respx_mock, api_key):
+    responses = iter([verdict(THREE[0])])
+
+    def answer(request):
+        # respx only raises Exception subclasses from a list, so Ctrl-C comes from a function.
+        response = next(responses, None)
+        if response is None:
+            raise KeyboardInterrupt
+        return response
+
+    respx_mock.post(VERIFY).mock(side_effect=answer)
+    result = runner.invoke(app, ["verify", *THREE])
+    assert result.exit_code == 130
+    assert result.stdout == THREE_LINES[0] + "\n"
+    assert result.stderr.endswith("Interrupted. Verified 1 of 3 addresses.\n")
+
+
+def test_verify_options_apply_to_every_request(respx_mock, api_key):
+    route = respx_mock.post(VERIFY).mock(side_effect=three_verdicts()[:2])
+    result = runner.invoke(app, ["verify", *THREE[:2], "--timeout", "10", "--no-smtp"])
+    assert result.exit_code == 0
+    assert [json.loads(c.request.content) for c in route.calls] == [
+        {"email": email, "timeout": 10, "smtp_check": False} for email in THREE[:2]
+    ]
+
+
+def test_verify_many_missing_key(monkeypatch):
+    monkeypatch.delenv("MAILTESTER_API_KEY", raising=False)
+    result = runner.invoke(app, ["verify", *THREE])
+    assert result.exit_code == 1
+    assert result.stderr.startswith("This will use 3 credits.\nError: ")
+    assert "MAILTESTER_API_KEY" in result.stderr
+
+
 # find
 
 
@@ -205,11 +508,6 @@ def test_transport_error(respx_mock, api_key, clock):
 
 
 # retries
-
-
-def fixture_response(name: str) -> httpx.Response:
-    status, headers, body = load_fixture(name)
-    return httpx.Response(status, headers=headers, json=body)
 
 
 @pytest.mark.parametrize("args", [["verify"], ["--json", "verify"]])

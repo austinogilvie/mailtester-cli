@@ -281,6 +281,45 @@ def test_missing_file(respx_mock, guard, api_key, tmp_path):
     assert not guard.called
 
 
+# duplicates
+
+
+def test_submit_drops_repeats_before_the_cost(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    lines = [EMAILS[0], EMAILS[1], EMAILS[0].upper(), f"  {EMAILS[1]} ", EMAILS[2]]
+    result = runner.invoke(app, ["batch", "submit", write_emails(tmp_path, lines)])
+    assert result.exit_code == 0
+    assert sent_json(route) == {"emails": EMAILS}
+    assert result.stderr == "Skipped 2 duplicates.\nThis will use up to 3 credits.\n"
+
+
+def test_submit_keeps_the_first_spelling(respx_mock, api_key):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    stdin = "Batch1@Example.com\nbatch1@example.com\n"
+    result = runner.invoke(app, ["batch", "submit", "-"], input=stdin)
+    assert result.exit_code == 0
+    assert sent_json(route) == {"emails": ["Batch1@Example.com"]}
+    assert result.stderr == "Skipped 1 duplicate.\nThis will use up to 1 credit.\n"
+
+
+def test_submit_repeats_do_not_reach_the_threshold(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    path = write_emails(tmp_path, many(99) + many(5))
+    result = runner.invoke(app, ["batch", "submit", path])
+    assert result.exit_code == 0
+    assert "Continue?" not in result.stderr
+    assert sent_json(route) == {"emails": many(99)}
+
+
+def test_submit_counts_the_limit_after_dropping_repeats(respx_mock, api_key, tmp_path):
+    route = serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    path = write_emails(tmp_path, many(10_000) + many(50))
+    result = runner.invoke(app, ["batch", "submit", path, "--yes"])
+    assert result.exit_code == 0
+    assert result.stderr == "Skipped 50 duplicates.\nThis will use up to 10,000 credits.\n"
+    assert len(sent_json(route)["emails"]) == 10_000
+
+
 # submit --wait
 
 
