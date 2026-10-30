@@ -4,6 +4,7 @@ from email.policy import default as _email_policy
 from pathlib import Path
 
 import pytest
+import typer.rich_utils
 
 import mailtester_cli.client
 from mailtester_cli import MailTester
@@ -85,3 +86,13 @@ def _isolate_api_key(monkeypatch):
     """Keep the real key (environment or .env) out of every test."""
     monkeypatch.delenv("MAILTESTER_API_KEY", raising=False)
     monkeypatch.setattr(mailtester_cli.client, "dotenv_values", lambda *args, **kwargs: {})
+
+
+@pytest.fixture(autouse=True)
+def _plain_help(monkeypatch):
+    """Render --help without ANSI codes even under GITHUB_ACTIONS, FORCE_COLOR, or PY_COLORS.
+
+    Typer reads those at import time and forces a color terminal, which splits the option
+    names the help tests look for.
+    """
+    monkeypatch.setattr(typer.rich_utils, "FORCE_TERMINAL", False)
