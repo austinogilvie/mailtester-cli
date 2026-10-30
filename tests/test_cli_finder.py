@@ -277,7 +277,7 @@ def test_help_lists_seven_commands_with_costs():
     assert (
         result.stdout.index("find-domain")
         < result.stdout.index("find-company")
-        < result.stdout.index("lists")
+        < result.stdout.index("│ lists")
     )
 
 

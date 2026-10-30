@@ -38,6 +38,12 @@ def main(
     json_output: bool = typer.Option(
         False, "--json", help="Print raw JSON instead of formatted output."
     ),
+    api_key: str | None = typer.Option(
+        None,
+        "--api-key",
+        show_default=False,
+        help="API key for this run. Shows in process lists; prefer MAILTESTER_API_KEY.",
+    ),
     version: bool = typer.Option(
         False,
         "--version",
@@ -47,7 +53,7 @@ def main(
     ),
 ) -> None:
     """Verify and find email addresses with the MailTester API."""
-    set_state(ctx, State(json=json_output))
+    set_state(ctx, State(json=json_output, api_key=api_key))
 
 
 verify.register(app)

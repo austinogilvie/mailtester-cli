@@ -32,7 +32,9 @@ cp .env.example .env
 MAILTESTER_API_KEY=evp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-An environment variable wins over `.env`. `mailtester` looks for `.env` in the directory you run it from (and its parents), so an installed `mailtester` still finds your project's key.
+`--api-key` (before the command, like `--json`) wins over the environment variable, which wins over `.env`. `mailtester` looks for `.env` in the directory you run it from (and its parents), so an installed `mailtester` still finds your project's key. `--api-key` shows up in process lists and shell history, so prefer the variable for anything long-lived.
+
+To point the client at a proxy, a staging host, or a local mock, set `MAILTESTER_BASE_URL` (for example `http://localhost:8080/api/v1`) in the environment or `.env`.
 
 ## CLI
 
@@ -44,9 +46,11 @@ $ mailtester --help
  Verify and find email addresses with the MailTester API.
 
 ╭─ Options ───────────────────────────────────────────────────────────────╮
-│ --json             Print raw JSON instead of formatted output.          │
-│ --version          Show the version and exit.                           │
-│ --help             Show this message and exit.                          │
+│ --json                  Print raw JSON instead of formatted output.     │
+│ --api-key        <str>  API key for this run. Shows in process lists;   │
+│                         prefer MAILTESTER_API_KEY.                      │
+│ --version               Show the version and exit.                      │
+│ --help                  Show this message and exit.                     │
 ╰─────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ──────────────────────────────────────────────────────────────╮
 │ verify        Verify email addresses. (1 credit each)                   │
@@ -217,9 +221,10 @@ Deleted list 1493
 $ mailtester credits
 Balance    5,000 credits
 Account    pay_as_you_go
+Rate limit 59 of 60 left, resets 2026-10-30 14:02:11 UTC
 ```
 
-`lists` shows 25 lists per page. Use `--page` and `--per-page` to move around, or `--all` to fetch every page. The page hint goes to stderr, so `> file` captures only the table. Accounts with a monthly allowance get an extra `credits` line, for example `Monthly    1,000 (renews 2026-11-01)`.
+`lists` shows 25 lists per page. Use `--page` and `--per-page` to move around, or `--all` to fetch every page. The page hint goes to stderr, so `> file` captures only the table. Accounts with a monthly allowance get an extra `credits` line, for example `Monthly    1,000 (renews 2026-11-01)`. The `Rate limit` line comes from the response headers, which don't say how long the window is (per minute by default, but a key's window can be per hour or day); `--json credits` prints only the API's `data`, without it.
 
 `lists delete` takes one or more ids and asks once before deleting unless you pass `--yes`. Deleting a list removes its results. Each deleted id prints `Deleted list <id>`; an id that isn't found or is still processing prints the API's error and the command carries on with the rest, exiting `1` at the end if any id failed. Any other error, such as a rate limit or a bad key, stops the command. The API refuses to delete a list that's still processing, and the error says so.
 
@@ -241,6 +246,8 @@ The keys are `error` (the API's message), `type` (the exception class, or `Usage
 mailtester verify "$EMAIL" --fail-on invalid,unknown && send "$EMAIL"
 ```
 
+For a second account, pass `--api-key` before the command. For a mock server, set `MAILTESTER_BASE_URL` (see [Configure](#configure)).
+
 ## Python
 
 The CLI is a thin layer over a Python client that you can use directly.
@@ -248,7 +255,7 @@ The CLI is a thin layer over a Python client that you can use directly.
 ```python
 from mailtester_cli import MailTester
 
-mt = MailTester()  # reads MAILTESTER_API_KEY from the environment or .env
+mt = MailTester()  # reads MAILTESTER_API_KEY (and MAILTESTER_BASE_URL) from the environment or .env
 # or: MailTester(api_key="evp_...")
 ```
 

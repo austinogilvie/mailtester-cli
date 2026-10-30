@@ -82,9 +82,10 @@ def mt():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_api_key(monkeypatch):
-    """Keep the real key (environment or .env) out of every test."""
+def _isolate_env(monkeypatch):
+    """Keep the real key and any base-URL override (environment or .env) out of every test."""
     monkeypatch.delenv("MAILTESTER_API_KEY", raising=False)
+    monkeypatch.delenv("MAILTESTER_BASE_URL", raising=False)
     monkeypatch.setattr(mailtester_cli.client, "dotenv_values", lambda *args, **kwargs: {})
 
 

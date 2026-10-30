@@ -3,15 +3,18 @@
 import copy
 import json
 
+import dotenv
 import httpx
 import pytest
 import typer
 from conftest import load_fixture, serve
 from typer.testing import CliRunner
 
+import mailtester_cli.client
+from mailtester_cli import MailTester
 from mailtester_cli.cli import app
 from mailtester_cli.client import BASE_URL
-from mailtester_cli.commands._shared import fail
+from mailtester_cli.commands._shared import State, fail
 
 VERIFY = f"{BASE_URL}/verify"
 FINDER = f"{BASE_URL}/finder/email"
@@ -338,3 +341,87 @@ def test_json_mode_ends_with_the_command(respx_mock, api_key, capsys):
     with pytest.raises(typer.Exit):
         fail("outside a command")
     assert capsys.readouterr().err == "Error: outside a command\n"
+
+
+# --api-key and MAILTESTER_BASE_URL
+
+CREDITS = f"{BASE_URL}/credits"
+
+
+def test_api_key_option_wins_over_the_environment(respx_mock, monkeypatch):
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_env")
+    route = serve(respx_mock, "credits_after", CREDITS)
+    result = runner.invoke(app, ["--api-key", "evp_flag", "credits"])
+    assert result.exit_code == 0
+    assert route.calls.last.request.headers["Authorization"] == "Bearer evp_flag"
+
+
+def test_api_key_option_wins_over_dotenv(respx_mock, monkeypatch):
+    values = {"MAILTESTER_API_KEY": "evp_dotenv"}
+    monkeypatch.setattr(mailtester_cli.client, "dotenv_values", lambda *a, **k: values)
+    route = serve(respx_mock, "credits_after", CREDITS)
+    runner.invoke(app, ["--api-key", "evp_flag", "credits"])
+    assert route.calls.last.request.headers["Authorization"] == "Bearer evp_flag"
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_empty_api_key_falls_through(respx_mock, monkeypatch, value):
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_env")
+    route = serve(respx_mock, "credits_after", CREDITS)
+    result = runner.invoke(app, ["--api-key", value, "credits"])
+    assert result.exit_code == 0
+    assert route.calls.last.request.headers["Authorization"] == "Bearer evp_env"
+
+
+def test_api_key_never_shows(respx_mock, clock):
+    respx_mock.get(CREDITS).mock(side_effect=httpx.ConnectError("refused evp_secret123"))
+    result = runner.invoke(app, ["--api-key", "evp_secret123", "credits"])
+    assert result.exit_code == 1
+    assert "evp_secret123" not in result.stdout + result.stderr
+    assert "evp_secret123" not in repr(State(api_key="evp_secret123"))
+    help_text = runner.invoke(app, ["--help"]).stdout
+    assert "--api-key" in help_text
+    assert "evp_" not in help_text
+
+
+def test_base_url_from_the_environment(respx_mock, api_key, monkeypatch):
+    monkeypatch.setenv("MAILTESTER_BASE_URL", "http://localhost:8080/api/v1/")
+    route = respx_mock.get("http://localhost:8080/api/v1/credits").respond(
+        200, json={"success": True, "data": fixture_data("credits_after")}
+    )
+    result = runner.invoke(app, ["credits"])
+    assert result.exit_code == 0
+    assert route.called
+
+
+def test_base_url_from_dotenv(respx_mock, monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text(
+        "MAILTESTER_API_KEY=evp_dotenv\nMAILTESTER_BASE_URL=https://mock.example/api/v1\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(mailtester_cli.client, "dotenv_values", dotenv.dotenv_values)
+    route = respx_mock.get("https://mock.example/api/v1/credits").respond(
+        200, json={"success": True, "data": fixture_data("credits_after")}
+    )
+    result = runner.invoke(app, ["credits"])
+    assert result.exit_code == 0
+    assert route.calls.last.request.headers["Authorization"] == "Bearer evp_dotenv"
+
+
+def test_base_url_argument_wins(monkeypatch):
+    monkeypatch.setenv("MAILTESTER_BASE_URL", "https://mock.example/api/v1")
+    with MailTester(api_key="evp_test", base_url="https://other.example/api/v1/") as mt:
+        assert mt.base_url == "https://other.example/api/v1"
+    with MailTester(api_key="evp_test") as mt:
+        assert mt.base_url == "https://mock.example/api/v1"
+
+
+def test_overridden_base_url_is_named_on_connection_error(respx_mock, api_key, monkeypatch, clock):
+    monkeypatch.setenv("MAILTESTER_BASE_URL", "http://localhost:8080/api/v1")
+    respx_mock.get("http://localhost:8080/api/v1/credits").mock(
+        side_effect=httpx.ConnectError("refused")
+    )
+    result = runner.invoke(app, ["credits"])
+    assert result.stderr.splitlines()[-1] == (
+        "Error: Could not reach MailTester at http://localhost:8080/api/v1: refused"
+    )

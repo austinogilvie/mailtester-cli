@@ -46,7 +46,8 @@ Planned work is tracked as GitHub Issues on `austinogilvie/mailtester-cli`, view
 
 ## Configuration
 
-- The API key comes from the `MAILTESTER_API_KEY` environment variable and is loaded from `.env` when present.
+- The API key comes from the global `--api-key` option, then the `MAILTESTER_API_KEY` environment variable, then `.env`. An empty value falls through. The `--api-key` value is never printed (`State.api_key` is `repr=False`).
+- `MAILTESTER_BASE_URL` (environment, then `.env`) overrides the base URL for a proxy or mock; a `base_url` argument to `MailTester` wins over both. Tests clear it in the autouse `_isolate_env` fixture.
 - `.env` is gitignored and holds the real key. `.env.example` holds a placeholder. Never commit, print, or log the real key.
 - If the key is missing, exit non-zero with a clear message that tells the user to set `MAILTESTER_API_KEY`.
 

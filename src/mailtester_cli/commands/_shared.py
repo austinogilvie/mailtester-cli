@@ -7,7 +7,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
 import typer
@@ -27,6 +27,7 @@ class State:
     """Global options, stored in `ctx.obj` by the app callback."""
 
     json: bool = False
+    api_key: str | None = field(default=None, repr=False)
 
 
 # The running command's options, so helpers such as `fail` can read --json without every
@@ -48,11 +49,11 @@ def get_state(ctx: typer.Context | None = None) -> State:
 
 
 def client() -> MailTester:
-    """Build a client from `MAILTESTER_API_KEY` (environment or `.env`).
+    """Build a client from `--api-key`, else `MAILTESTER_API_KEY` (environment or `.env`).
 
     Each retry prints a line on stderr.
     """
-    return MailTester(on_retry=_print_retry)
+    return MailTester(api_key=get_state().api_key, on_retry=_print_retry)
 
 
 def _print_retry(retry: RetryAttempt) -> None:

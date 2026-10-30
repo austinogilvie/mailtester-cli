@@ -86,6 +86,7 @@ def test_dotenv_not_read_when_env_set(monkeypatch):
     calls = []
     monkeypatch.setattr(mailtester_cli.client, "dotenv_values", lambda *a, **k: calls.append(a))
     monkeypatch.setenv("MAILTESTER_API_KEY", "evp_env")
+    monkeypatch.setenv("MAILTESTER_BASE_URL", "https://mock.example/api/v1")
     MailTester()
     assert calls == []
 

@@ -39,6 +39,7 @@ from mailtester_cli.models import (
 
 BASE_URL = "https://app.mailtester.com/api/v1"
 ENV_VAR = "MAILTESTER_API_KEY"
+BASE_URL_ENV_VAR = "MAILTESTER_BASE_URL"
 MAX_BATCH_EMAILS = 10_000
 # the docs say "max 10 MB"; decimal, so the message and the check agree
 MAX_UPLOAD_BYTES = 10_000_000
@@ -146,19 +147,30 @@ def _int_header(headers: httpx.Headers, name: str) -> int | None:
         return None
 
 
-def _env_key() -> str | None:
-    value = os.environ.get(ENV_VAR, "").strip()
-    return value or None
+class _Settings:
+    """Our variables from the environment, else the user's `.env`, read at most once."""
+
+    def __init__(self) -> None:
+        self._dotenv: dict[str, str | None] | None = None
+
+    def get(self, name: str) -> str | None:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+        if self._dotenv is None:
+            # usecwd finds the user's .env after `uv tool install`.
+            self._dotenv = dotenv_values(find_dotenv(usecwd=True))
+        return (self._dotenv.get(name) or "").strip() or None
 
 
-def _dotenv_key() -> str | None:
-    # Read only our variable; usecwd finds the user's .env after `uv tool install`.
-    value = (dotenv_values(find_dotenv(usecwd=True)).get(ENV_VAR) or "").strip()
-    return value or None
+def _resolve_base_url(base_url: str | None, settings: _Settings) -> str:
+    """The argument, then MAILTESTER_BASE_URL from the environment, then `.env`, then BASE_URL."""
+    url = (base_url or "").strip() or settings.get(BASE_URL_ENV_VAR) or BASE_URL
+    return url.rstrip("/")
 
 
-def _resolve_key(api_key: str | None) -> str:
-    key = (api_key or "").strip() or _env_key() or _dotenv_key()
+def _resolve_key(api_key: str | None, settings: _Settings) -> str:
+    key = (api_key or "").strip() or settings.get(ENV_VAR)
     if key is None:
         raise MissingAPIKeyError(
             f"{ENV_VAR} is not set. Set it in your environment or in a .env file."
@@ -211,7 +223,7 @@ class MailTester:
         self,
         api_key: str | None = None,
         *,
-        base_url: str = BASE_URL,
+        base_url: str | None = None,
         timeout: float = 90.0,
         http_client: httpx.Client | None = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -226,13 +238,14 @@ class MailTester:
             or not max_retry_wait >= 0
         ):
             raise ValueError(f"max_retry_wait must be a number >= 0 (got {max_retry_wait!r})")
-        self._api_key = _resolve_key(api_key)
+        settings = _Settings()
+        self._api_key = _resolve_key(api_key, settings)
         self._headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Accept": "application/json",
             "User-Agent": f"mailtester-cli/{__version__}",
         }
-        self.base_url = base_url.rstrip("/")
+        self.base_url = _resolve_base_url(base_url, settings)
         self.timeout = timeout
         self.max_retries = max_retries
         self.max_retry_wait = float(max_retry_wait)
@@ -328,7 +341,9 @@ class MailTester:
             )
         except httpx.TransportError as exc:
             detail = (str(exc) or type(exc).__name__).replace(self._api_key, "***")
-            raise APIConnectionError(f"Could not reach MailTester: {detail}") from exc
+            # Name the host only when it was overridden: that's the one a user may have mistyped.
+            where = "" if self.base_url == BASE_URL else f" at {self.base_url}"
+            raise APIConnectionError(f"Could not reach MailTester{where}: {detail}") from exc
         self.rate_limit = RateLimit.from_headers(response.headers)
         if not response.is_success:
             raise error_from_response(response)
