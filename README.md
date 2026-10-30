@@ -49,7 +49,7 @@ $ mailtester --help
 │ --help             Show this message and exit.                          │
 ╰─────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ──────────────────────────────────────────────────────────────╮
-│ verify        Verify a single email address. (1 credit)                 │
+│ verify        Verify email addresses. (1 credit each)                   │
 │ batch         Submit, track, and fetch bulk verification jobs.          │
 │ find          Find a person's email from name + domain. (3 credits)     │
 │ find-domain   Find role mailboxes at a domain. (3 credits)              │
@@ -59,19 +59,20 @@ $ mailtester --help
 ╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
-Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` API or runtime error (including `find`, `find-domain`, or `find-company` with no match), `2` usage error, `130` interrupted. A rate-limited or failed request is retried a couple of times before a command gives up, and each retry prints a line on stderr, such as `Rate limited, retrying in 30s...`.
+Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` API or runtime error (including `find`, `find-domain`, or `find-company` with no match, and a `verify` run in which any address failed), `2` usage error, `130` interrupted. A rate-limited or failed request is retried a couple of times before a command gives up, and each retry prints a line on stderr, such as `Rate limited, retrying in 30s...`.
 
-### Verify one address
+### Verify addresses
 
 ```text
 $ mailtester verify jane@acme.com
+This will use 1 credit.
 jane@acme.com  risky  score=50
   reason      CATCH_ALL
   provider    -
   flags       accept_all
 ```
 
-`verify` costs 1 credit and says so on stderr. `--timeout N` sets the server-side SMTP timeout (5–60 seconds). `--no-smtp` asks the API to skip the SMTP check, but the call still costs 1 credit and the API may check anyway.
+`verify` costs 1 credit per address and says so on stderr. `--timeout N` sets the server-side SMTP timeout (5–60 seconds). `--no-smtp` asks the API to skip the SMTP check, but the call still costs 1 credit and the API may check anyway.
 
 Use `--json` to get machine-readable output:
 
@@ -79,6 +80,24 @@ Use `--json` to get machine-readable output:
 mailtester --json verify jane@acme.com | jq .result
 # "risky"
 ```
+
+Give several addresses, or a file with one per line through `--file` (`-` reads stdin), and `verify` checks them one at a time in order, arguments first. Each address prints one line as its answer arrives: the address, verdict, score, and reason code. Flags, provider, and suggestions are in `--json`, which prints JSON Lines (one object per line, no wrapping array) when there is more than one address after repeats are dropped, and the usual indented object when there is one.
+
+```text
+$ mailtester verify jane@acme.com bob@acme.com --file more.txt
+Skipped 1 duplicate.
+This will use 4 credits.
+jane@acme.com      risky    score=50   CATCH_ALL
+bob@acme.com       invalid  score=0    INVALID
+sales@example.org  risky    score=50   CATCH_ALL
+nobody@nomx.test   invalid  score=0    NO_MX_RECORD
+
+$ mailtester --json verify --file leads.txt | jq -c 'select(.result == "valid") | .email'
+```
+
+Blank lines are skipped, and repeated addresses are dropped before the cost is counted, ignoring case and keeping the first spelling. For 100 or more addresses `verify` asks before starting, unless you pass `--yes`; reading from stdin needs `--yes` at that size because stdin can't answer the prompt. If the API rejects one address as malformed (`422`), `verify` prints `Error: <address>: <message>` and moves on. Any other error (a bad key, no credits, a rate limit that outlasts the retries, a server or connection failure) would hit every remaining address too, so it stops the run and says how many addresses were verified and how many were not sent. The exit code is `1` if any address failed and `0` when every address got a verdict, whatever the verdicts are.
+
+One request at a time takes about a minute per 60 addresses at the default rate limit. For hundreds of addresses, `batch submit` is faster, but it uses a different engine whose results can differ (see below).
 
 ### Verify a batch
 

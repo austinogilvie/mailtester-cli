@@ -22,6 +22,9 @@ A --no-start batch is free, and recording it also captures GET /lists/{id} and D
 
 An XLSX file can't be counted locally, so a started upload of one is refused: use --no-start.
 
+--verify-email also posts a malformed address first (step 3p) to record the 422, with the
+balance printed on each side, since whether a 422 is charged isn't confirmed.
+
 The role-mailbox finders (015) take one input each. The empty-body probes that name their
 request fields run (free) whenever a finder flag is given, before the five paid steps, which
 cost 3 each at most:
@@ -341,6 +344,35 @@ def run_finder_probes(rec: Recorder) -> dict[str, str]:
     return fields
 
 
+VERIFY_PROBE = {"email": "not-an-email"}
+
+
+def run_verify_probe(rec: Recorder) -> None:
+    """Step 3p: POST /verify with a malformed address, saved as `error_422_email`.
+
+    A 422 is validation and shouldn't be charged, but that isn't confirmed, so it runs only
+    beside the paid step 3 and the balance is printed on each side. A status other than 422
+    is printed and not saved, like the finder probes.
+    """
+    before = _balance(rec.client)
+    resp = rec.client.post("/verify", json=VERIFY_PROBE)
+    after = _balance(rec.client)
+    if resp.status_code == 422:
+        rec.save("3p", "error_422_email", resp, json_body=VERIFY_PROBE)
+    else:
+        print(f"[ 3p] expected 422 from a malformed address, got {resp.status_code}; not saved")
+    if before is None or after is None:
+        print("[ 3p] GET /credits -> balance unknown; the cost isn't checked")
+    else:
+        print(f"[ 3p] GET /credits -> balance {after} (step {before - after})")
+
+
+def _balance(client: httpx.Client) -> int | None:
+    data = _data(client.get("/credits"))
+    value = data.get("balance") if isinstance(data, dict) else None
+    return value if isinstance(value, int) else None
+
+
 def _redactable(domain: object) -> bool:
     """False for an empty value or a reserved `.invalid` name, which has nothing to hide."""
     return isinstance(domain, str) and bool(domain) and not domain.lower().endswith(".invalid")
@@ -376,9 +408,7 @@ class Budget:
         self.before = self.balance()
 
     def balance(self) -> int | None:
-        data = _data(self.rec.client.get("/credits"))
-        value = data.get("balance") if isinstance(data, dict) else None
-        return value if isinstance(value, int) else None
+        return _balance(self.rec.client)
 
     def allow(self, step: str) -> None:
         """Raise Stop when the next call could push the spend past the plan."""
@@ -465,6 +495,7 @@ def run_paid(
     rec: Recorder, args: argparse.Namespace, fields: dict[str, str] | None = None
 ) -> int | None:
     if args.verify_email:
+        run_verify_probe(rec)
         body = {"email": args.verify_email, "smtp_check": True}
         expect_ok("3", rec.call("3", "verify_single", "POST", "/verify", json_body=body))
     if args.find:
