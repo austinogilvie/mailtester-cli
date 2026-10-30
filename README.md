@@ -1,5 +1,7 @@
 # mailtester-cli
 
+[![CI](https://github.com/austinogilvie/mailtester-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/austinogilvie/mailtester-cli/actions/workflows/ci.yml)
+
 Verify and find email addresses from your terminal or from Python code with the [MailTester](https://app.mailtester.com) API.
 
 > **Status: v0.1.0.** The first release. The CLI and the Python client below are both built and tested.
