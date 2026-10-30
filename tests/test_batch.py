@@ -2,7 +2,7 @@ import httpx
 import pytest
 from conftest import load_fixture, load_request, sent_json, serve
 
-from mailtester_cli.client import BASE_URL
+from mailtester_cli.client import BASE_URL, MailTester
 from mailtester_cli.errors import (
     BatchFailedError,
     BatchNotStartedError,
@@ -18,29 +18,6 @@ SUBMIT = f"{BASE_URL}/verify/batch"
 STATUS = f"{BASE_URL}/verify/batch/1457"
 RESULTS = f"{BASE_URL}/verify/batch/1457/results"
 EMAILS = ["batch1@example.com", "batch2@example.com", "batch3@example.net"]
-
-
-class FakeClock:
-    """Stands in for time.monotonic/time.sleep: sleep records the delay and advances now."""
-
-    def __init__(self) -> None:
-        self.t = 0.0
-        self.sleeps: list[float] = []
-
-    def now(self) -> float:
-        return self.t
-
-    def sleep(self, seconds: float) -> None:
-        self.sleeps.append(seconds)
-        self.t += seconds
-
-
-@pytest.fixture
-def clock(mt):
-    fake = FakeClock()
-    mt._sleep = fake.sleep
-    mt._clock = fake.now
-    return fake
 
 
 def response(name: str, **data) -> httpx.Response:
@@ -173,11 +150,11 @@ def test_wait_honors_retry_after(respx_mock, mt, clock):
     assert clock.sleeps == [30]
 
 
-def test_wait_uses_max_interval_without_retry_after(respx_mock, mt, clock):
+def test_wait_uses_backoff_without_retry_after(respx_mock, mt, clock):
     limited = httpx.Response(429, json={"success": False, "error": "Rate limit exceeded"})
     status_route(respx_mock, limited, response(COMPLETED))
     assert mt.wait_for_batch(1457).is_complete
-    assert clock.sleeps == [10.0]
+    assert clock.sleeps == [1.0]
 
 
 def test_wait_keeps_polling_unknown_status(respx_mock, mt, clock):
@@ -250,6 +227,31 @@ def test_wait_calls_on_poll_per_successful_poll(respx_mock, mt, clock):
     seen: list[BatchJob] = []
     mt.wait_for_batch(1457, on_poll=seen.append)
     assert [job.status for job in seen] == ["processing", "processing", "completed"]
+
+
+def test_wait_429_retries_then_keeps_polling(respx_mock, mt, clock):
+    status_route(respx_mock, response("error_429"), response(PROCESSING), response(COMPLETED))
+    seen: list[BatchJob] = []
+    assert mt.wait_for_batch(1457, on_poll=seen.append).is_complete
+    assert clock.sleeps == [30, 3.0]
+    assert [job.status for job in seen] == ["processing", "completed"]
+
+
+def test_wait_gives_up_after_max_retries_429s_in_a_row(respx_mock, mt, clock):
+    route = status_route(
+        respx_mock, *(response("error_429") for _ in range(3)), response(COMPLETED)
+    )
+    with pytest.raises(RateLimitError):
+        mt.wait_for_batch(1457)
+    assert clock.sleeps == [30, 30]
+    assert route.call_count == 3
+
+
+def test_wait_without_retries_propagates_a_429(respx_mock, clock):
+    status_route(respx_mock, response("error_429"), response(COMPLETED))
+    with pytest.raises(RateLimitError):
+        MailTester(api_key="evp_test", max_retries=0).wait_for_batch(1457)
+    assert clock.sleeps == []
 
 
 def test_wait_propagates_404_without_retry(respx_mock, mt, clock):

@@ -96,3 +96,37 @@ def _plain_help(monkeypatch):
     names the help tests look for.
     """
     monkeypatch.setattr(typer.rich_utils, "FORCE_TERMINAL", False)
+
+
+class FakeClock:
+    """Stands in for time.monotonic/time.sleep: sleep records the delay and advances now."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    """Fail any test that would sleep for real; the `clock` fixture replaces this."""
+
+    def sleep(seconds: float) -> None:
+        pytest.fail(f"a test slept for real ({seconds}s); use the clock fixture")
+
+    monkeypatch.setattr(MailTester, "_sleep", staticmethod(sleep))
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """A FakeClock patched onto the class, so clients built inside CLI commands use it too."""
+    fake = FakeClock()
+    monkeypatch.setattr(MailTester, "_sleep", staticmethod(fake.sleep))
+    monkeypatch.setattr(MailTester, "_clock", staticmethod(fake.now))
+    return fake

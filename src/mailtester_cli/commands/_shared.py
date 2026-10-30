@@ -11,8 +11,13 @@ from typing import Any, NoReturn
 
 import typer
 
-from mailtester_cli.client import MailTester
-from mailtester_cli.errors import InsufficientCreditsError, MailTesterError, RateLimitError
+from mailtester_cli.client import MailTester, RetryAttempt
+from mailtester_cli.errors import (
+    InsufficientCreditsError,
+    MailTesterError,
+    RateLimitError,
+    ServerError,
+)
 
 
 @dataclass(frozen=True)
@@ -28,8 +33,23 @@ def get_state(ctx: typer.Context) -> State:
 
 
 def client() -> MailTester:
-    """Build a client from `MAILTESTER_API_KEY` (environment or `.env`)."""
-    return MailTester()
+    """Build a client from `MAILTESTER_API_KEY` (environment or `.env`).
+
+    Each retry prints a line on stderr.
+    """
+    return MailTester(on_retry=_print_retry)
+
+
+def _print_retry(retry: RetryAttempt) -> None:
+    """One stderr line per retry, under --json too: a retry is progress, not a result."""
+    error = retry.error
+    if isinstance(error, RateLimitError):
+        what = "Rate limited"
+    elif isinstance(error, ServerError):
+        what = f"MailTester returned {error.status_code}"
+    else:
+        what = "Could not reach MailTester"
+    typer.echo(f"{what}, retrying in {retry.delay:g}s...", err=True)
 
 
 def fail(message: str, code: int = 1) -> NoReturn:

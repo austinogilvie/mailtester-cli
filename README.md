@@ -59,7 +59,7 @@ $ mailtester --help
 ╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
-Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` API or runtime error (including `find`, `find-domain`, or `find-company` with no match), `2` usage error, `130` interrupted.
+Results go to stdout. Errors, prompts, cost notes, and progress go to stderr, so `> file` captures only results. Exit codes: `0` success, `1` API or runtime error (including `find`, `find-domain`, or `find-company` with no match), `2` usage error, `130` interrupted. A rate-limited or failed request is retried a couple of times before a command gives up, and each retry prints a line on stderr, such as `Rate limited, retrying in 30s...`.
 
 ### Verify one address
 
@@ -287,6 +287,8 @@ mt.credits().balance  # 5000
 
 ### Errors
 
+The client retries on its own before raising. A `429` is retried after `retry_after` seconds, and a connection failure, or a `5xx` on a read-only call, is retried with a short backoff: at most `max_retries` (2) retries and `max_retry_wait` (60) seconds of waiting per call. A paid `POST` is never replayed after a server error. `MailTester(max_retries=0)` turns retries off, and `on_retry` is called with a `RetryAttempt` before each wait.
+
 Every API error raises a subclass of `MailTesterError`:
 
 ```python
@@ -303,7 +305,7 @@ try:
 except InsufficientCreditsError as e:
     print(f"Out of credits ({e.available_credits} left)")
 except RateLimitError as e:
-    print(f"Slow down, retry in {e.retry_after}s")
+    print(f"Still rate limited after retrying; try again in {e.retry_after}s")
 except MailTesterError as e:
     print(f"MailTester error: {e}")
 ```
@@ -312,7 +314,7 @@ except MailTesterError as e:
 
 | Module | Contents |
 |---|---|
-| `mailtester_cli.client` | `MailTester`, the API client. Also importable from `mailtester_cli`. |
+| `mailtester_cli.client` | `MailTester`, the API client, and `RetryAttempt`, what its `on_retry` callback receives. Both also importable from `mailtester_cli`. |
 | `mailtester_cli.models` | `VerifyResult`, `FinderResult`, `RoleFinderResult`, `BatchJob`, `ListJob`, `ListPage`, `Credits`, and other response types |
 | `mailtester_cli.errors` | `MailTesterError` and its subclasses |
 | `mailtester_cli.cli` | The `mailtester` Typer app |

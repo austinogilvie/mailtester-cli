@@ -19,21 +19,6 @@ COMPLETED = "Batch 1457  completed  100%  (3/3)"
 runner = CliRunner()
 
 
-class FakeClock:
-    """Stands in for time.monotonic/time.sleep: sleep records the delay and advances now."""
-
-    def __init__(self) -> None:
-        self.t = 0.0
-        self.sleeps: list[float] = []
-
-    def now(self) -> float:
-        return self.t
-
-    def sleep(self, seconds: float) -> None:
-        self.sleeps.append(seconds)
-        self.t += seconds
-
-
 @pytest.fixture
 def api_key(monkeypatch):
     monkeypatch.setenv("MAILTESTER_API_KEY", "evp_test")
@@ -43,14 +28,6 @@ def api_key(monkeypatch):
 def guard(respx_mock):
     """A catch-all route: any request at all shows up as guard.called."""
     return respx_mock.route().respond(500)
-
-
-@pytest.fixture
-def clock(monkeypatch):
-    fake = FakeClock()
-    monkeypatch.setattr(MailTester, "_sleep", staticmethod(fake.sleep))
-    monkeypatch.setattr(MailTester, "_clock", staticmethod(fake.now))
-    return fake
 
 
 def fixture_data(name: str):
@@ -582,11 +559,15 @@ def test_results_not_complete_points_to_status(respx_mock, api_key):
     )
 
 
-def test_results_other_errors_have_no_status_hint(respx_mock, api_key):
+def test_results_other_errors_have_no_status_hint(respx_mock, api_key, clock):
     serve(respx_mock, "error_500", RESULTS)
     result = runner.invoke(app, ["batch", "results", "1457"])
     assert result.exit_code == 1
-    assert result.stderr == "Error: Verification failed: SMTP connection error\n"
+    assert result.stderr == (
+        "MailTester returned 500, retrying in 1s...\n"
+        "MailTester returned 500, retrying in 2s...\n"
+        "Error: Verification failed: SMTP connection error\n"
+    )
 
 
 # batch wait
@@ -605,6 +586,27 @@ def test_wait_command_prints_json_results(respx_mock, api_key, clock):
     assert json.loads(result.stdout) == json_rows()
     assert result.stderr.splitlines() == [PROCESSING, COMPLETED]
     assert clock.sleeps == [3.0]
+
+
+def test_wait_command_prints_a_retry_line_between_polls(respx_mock, api_key, clock):
+    status, headers, body = load_fixture("error_429")
+    respx_mock.get(STATUS).mock(
+        side_effect=[
+            status_response("batch_status_processing"),
+            httpx.Response(status, headers=headers, json=body),
+            status_response("batch_status_completed"),
+        ]
+    )
+    serve_results(respx_mock, "batch_results_json_all")
+    result = runner.invoke(app, ["batch", "wait", "1457"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == json_rows()
+    assert result.stderr.splitlines() == [
+        PROCESSING,
+        "Rate limited, retrying in 30s...",
+        COMPLETED,
+    ]
+    assert clock.sleeps == [3.0, 30]
 
 
 def test_wait_command_completed_immediately_prints_one_line(respx_mock, api_key, clock):

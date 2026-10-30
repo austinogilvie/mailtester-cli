@@ -15,6 +15,7 @@ from mailtester_cli.commands._shared import confirm, fmt_int, handle_errors
 
 VERIFY = f"{BASE_URL}/verify"
 FINDER = f"{BASE_URL}/finder/email"
+CREDITS = f"{BASE_URL}/credits"
 VERIFY_COST = "This will use 1 credit.\n"
 README_ORDER = ["verify", "batch", "find", "find-domain", "find-company", "lists", "credits"]
 
@@ -163,11 +164,15 @@ def test_find_json(respx_mock, api_key):
     [
         ("error_401", "Error: Invalid API key\n"),
         ("error_402", "Error: Insufficient credits (available credits: 0)\n"),
-        ("error_429", "Error: Rate limit exceeded. Retry in 30s.\n"),
+        (
+            "error_429",
+            "Rate limited, retrying in 30s...\n" * 2
+            + "Error: Rate limit exceeded. Retry in 30s.\n",
+        ),
         ("error_404", None),
     ],
 )
-def test_api_errors(respx_mock, api_key, fixture, expected):
+def test_api_errors(respx_mock, api_key, clock, fixture, expected):
     serve(respx_mock, fixture, VERIFY, method="POST")
     result = runner.invoke(app, ["verify", "x@example.com"])
     assert result.exit_code == 1
@@ -187,11 +192,63 @@ def test_missing_key(monkeypatch):
     assert "MAILTESTER_API_KEY" in result.stderr
 
 
-def test_transport_error(respx_mock, api_key):
+def test_transport_error(respx_mock, api_key, clock):
     respx_mock.post(VERIFY).mock(side_effect=httpx.ConnectError)
     result = runner.invoke(app, ["verify", "x@example.com"])
     assert result.exit_code == 1
-    assert result.stderr.startswith(VERIFY_COST + "Error: Could not reach MailTester")
+    assert result.stderr.startswith(
+        VERIFY_COST
+        + "Could not reach MailTester, retrying in 1s...\n"
+        + "Could not reach MailTester, retrying in 2s...\n"
+        + "Error: Could not reach MailTester"
+    )
+
+
+# retries
+
+
+def fixture_response(name: str) -> httpx.Response:
+    status, headers, body = load_fixture(name)
+    return httpx.Response(status, headers=headers, json=body)
+
+
+@pytest.mark.parametrize("args", [["verify"], ["--json", "verify"]])
+def test_verify_prints_a_retry_line_then_the_result(respx_mock, api_key, clock, args):
+    respx_mock.post(VERIFY).mock(
+        side_effect=[fixture_response("error_429"), fixture_response("verify_single")]
+    )
+    result = runner.invoke(app, [*args, "batch1@example.com"])
+    assert result.exit_code == 0
+    assert result.stderr == VERIFY_COST + "Rate limited, retrying in 30s...\n"
+    if "--json" in args:
+        assert json.loads(result.stdout) == fixture_data("verify_single")
+    else:
+        assert result.stdout.startswith("batch1@example.com  risky  score=50\n")
+    assert clock.sleeps == [30]
+
+
+@pytest.mark.parametrize(
+    ("failure", "line"),
+    [
+        (fixture_response("error_502"), "MailTester returned 502, retrying in 1s..."),
+        (httpx.ConnectError("refused"), "Could not reach MailTester, retrying in 1s..."),
+    ],
+)
+def test_credits_prints_a_retry_line_for_5xx_and_connection_errors(
+    respx_mock, api_key, clock, failure, line
+):
+    respx_mock.get(CREDITS).mock(side_effect=[failure, fixture_response("credits_before")])
+    result = runner.invoke(app, ["credits"])
+    assert result.exit_code == 0
+    assert result.stderr == f"{line}\n"
+
+
+def test_verify_does_not_replay_a_5xx(respx_mock, api_key, clock):
+    route = serve(respx_mock, "error_500", VERIFY, method="POST")
+    result = runner.invoke(app, ["verify", "x@example.com"])
+    assert result.exit_code == 1
+    assert result.stderr == VERIFY_COST + f"Error: {load_fixture('error_500')[2]['error']}\n"
+    assert route.call_count == 1
 
 
 def test_keyboard_interrupt_exits_130(capsys):
