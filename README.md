@@ -4,14 +4,14 @@
 
 Verify and find email addresses from your terminal or from Python code with the [MailTester](https://app.mailtester.com) API.
 
-> **Status: v0.2.0.** Adds `batch upload`, `batch wait`, list paging and management, and the `find-domain` and `find-company` role-mailbox finders; see the [changelog](CHANGELOG.md). The CLI and the Python client below are both built and tested.
+> **Status: v0.3.0.** Adds `verify` for many addresses, automatic retries, JSON errors and `--fail-on` for scripts, `--api-key`, and `MAILTESTER_BASE_URL`; see the [changelog](CHANGELOG.md). The CLI and the Python client below are both built and tested.
 
 ## Install
 
 ```bash
 uv tool install git+https://github.com/austinogilvie/mailtester-cli
 # or pin this release:
-uv tool install git+https://github.com/austinogilvie/mailtester-cli@v0.2.0
+uv tool install git+https://github.com/austinogilvie/mailtester-cli@v0.3.0
 ```
 
 Or, for development:
