@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -23,6 +24,7 @@ from mailtester_cli.errors import (
     MailTesterError,
     MissingAPIKeyError,
     RateLimitError,
+    ServerError,
     error_from_response,
 )
 from mailtester_cli.models import (
@@ -52,6 +54,15 @@ _UPLOAD_CONTENT_TYPES = {
 # BatchNotStartedError on it instead of timing out.
 FAILURE_STATUSES = frozenset({"failed", "cancelled", "canceled", "error"})
 
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_MAX_RETRY_WAIT = 60.0
+_BACKOFF_CAP = 10.0
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+# A 5xx means the server answered without acting, so these are safe to resend after one.
+_IDEMPOTENT = frozenset({"GET", "DELETE"})
+# The request never left, so even a paid POST can't be charged twice by a resend.
+_SAFE_TRANSPORT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
 T = TypeVar("T")
 
 
@@ -71,6 +82,54 @@ class RateLimit:
             remaining=_int_header(headers, "x-ratelimit-remaining"),
             reset=_timestamp(reset),
         )
+
+
+@dataclass(frozen=True)
+class RetryAttempt:
+    """Handed to `on_retry` before each retry's wait. `attempt` counts from 1."""
+
+    error: MailTesterError
+    attempt: int
+    max_retries: int
+    delay: float
+    method: str
+    path: str
+
+
+def _retry_delay(
+    method: str,
+    error: MailTesterError,
+    attempt: int,
+    *,
+    max_retries: int,
+    slept: float,
+    budget: float,
+    reset_in: float | None = None,
+) -> float | None:
+    """Seconds to wait before retry number `attempt`, or None to raise `error` instead.
+
+    A 429 waits `retry_after`, else `reset_in` (seconds until X-RateLimit-Reset), else the
+    backoff of 1, 2, 4... capped at 10. A 5xx is retried on GET and DELETE only; a transport
+    error on any method when the request never left, else on GET only. No delay may take the
+    call's total wait (`slept` so far) past `budget`.
+    """
+    if attempt > max_retries:
+        return None
+    delay = min(2.0 ** (attempt - 1), _BACKOFF_CAP)
+    if isinstance(error, RateLimitError):
+        if error.retry_after and error.retry_after > 0:
+            delay = float(error.retry_after)
+        elif reset_in is not None and reset_in > 0:
+            delay = float(math.ceil(reset_in))
+    elif isinstance(error, ServerError):
+        if error.status_code not in _RETRY_STATUSES or method not in _IDEMPOTENT:
+            return None
+    elif isinstance(error, APIConnectionError):
+        if not isinstance(error.__cause__, _SAFE_TRANSPORT_ERRORS) and method != "GET":
+            return None
+    else:
+        return None
+    return delay if slept + delay <= budget else None
 
 
 def _timestamp(value: int | None) -> datetime | None:
@@ -143,9 +202,10 @@ def _json_object(response: httpx.Response) -> dict:
 class MailTester:
     """Client for the MailTester REST API."""
 
-    # wait_for_batch uses only these, so tests can swap in a fake clock.
+    # Retries and wait_for_batch use only these, so tests can swap in a fake clock.
     _sleep = staticmethod(time.sleep)
     _clock = staticmethod(time.monotonic)
+    _wall = staticmethod(time.time)  # compared with X-RateLimit-Reset, a Unix timestamp
 
     def __init__(
         self,
@@ -154,7 +214,18 @@ class MailTester:
         base_url: str = BASE_URL,
         timeout: float = 90.0,
         http_client: httpx.Client | None = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        max_retry_wait: float = DEFAULT_MAX_RETRY_WAIT,
+        on_retry: Callable[[RetryAttempt], None] | None = None,
     ) -> None:
+        if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
+            raise ValueError(f"max_retries must be an int >= 0 (got {max_retries!r})")
+        if (
+            isinstance(max_retry_wait, bool)
+            or not isinstance(max_retry_wait, int | float)
+            or not max_retry_wait >= 0
+        ):
+            raise ValueError(f"max_retry_wait must be a number >= 0 (got {max_retry_wait!r})")
         self._api_key = _resolve_key(api_key)
         self._headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -163,6 +234,9 @@ class MailTester:
         }
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.max_retry_wait = float(max_retry_wait)
+        self._on_retry = on_retry
         self.rate_limit = RateLimit(None, None, None)
         self._owns_client = http_client is None
         self._client = http_client if http_client is not None else httpx.Client(timeout=timeout)
@@ -195,7 +269,53 @@ class MailTester:
         json: Any = None,
         data: dict | None = None,
         files: dict | None = None,
+        retry_budget: float | None = None,
     ) -> httpx.Response:
+        """Send a request, retrying per `_retry_delay`; the last error raises unchanged.
+
+        `retry_budget` caps this call's total wait, `max_retry_wait` by default.
+        """
+        budget = self.max_retry_wait if retry_budget is None else retry_budget
+        slept = 0.0
+        attempt = 0
+        while True:
+            try:
+                return self._send(method, path, params=params, json=json, data=data, files=files)
+            except MailTesterError as exc:
+                attempt += 1
+                delay = _retry_delay(
+                    method,
+                    exc,
+                    attempt,
+                    max_retries=self.max_retries,
+                    slept=slept,
+                    budget=budget,
+                    reset_in=self._reset_in() if isinstance(exc, RateLimitError) else None,
+                )
+                if delay is None:
+                    raise
+                if self._on_retry is not None:
+                    retry = RetryAttempt(exc, attempt, self.max_retries, delay, method, path)
+                    self._on_retry(retry)
+                self._sleep(delay)
+                slept += delay
+
+    def _reset_in(self) -> float | None:
+        """Seconds until the latest response's X-RateLimit-Reset, or None without one."""
+        reset = self.rate_limit.reset
+        return reset.timestamp() - self._wall() if reset is not None else None
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None,
+        json: Any,
+        data: dict | None,
+        files: dict | None,
+    ) -> httpx.Response:
+        """One request: transport errors become APIConnectionError, non-2xx the mapped error."""
         try:
             response = self._client.request(
                 method,
@@ -223,9 +343,18 @@ class MailTester:
         json: Any = None,
         data: dict | None = None,
         files: dict | None = None,
+        retry_budget: float | None = None,
     ) -> dict:
         """Run a request and return its whole JSON body, for responses with no `data` key."""
-        response = self._request(method, path, params=params, json=json, data=data, files=files)
+        response = self._request(
+            method,
+            path,
+            params=params,
+            json=json,
+            data=data,
+            files=files,
+            retry_budget=retry_budget,
+        )
         return _json_object(response)
 
     def _data(
@@ -237,9 +366,18 @@ class MailTester:
         json: Any = None,
         data: dict | None = None,
         files: dict | None = None,
+        retry_budget: float | None = None,
     ) -> Any:
         """Run a request and return the `data` member of its JSON body."""
-        response = self._request(method, path, params=params, json=json, data=data, files=files)
+        response = self._request(
+            method,
+            path,
+            params=params,
+            json=json,
+            data=data,
+            files=files,
+            retry_budget=retry_budget,
+        )
         body = _json_object(response)
         if "data" not in body:
             raise MailTesterError(
@@ -293,7 +431,8 @@ class MailTester:
         return self.lists_page(page=page, per_page=per_page).items
 
     def iter_lists(self, *, per_page: int = 100) -> Iterator[ListJob]:
-        """Yield every list, page by page, `per_page` (1-100) per request. No sleeping.
+        """Yield every list, `per_page` (1-100) per request. No sleeping between pages; a
+        `429` waits per the retry policy.
 
         The page count comes from page 1's `meta.last_page`; an empty page ends the walk early.
         """
@@ -392,7 +531,11 @@ class MailTester:
 
     def batch_status(self, batch_id: int | str) -> BatchJob:
         """Return a batch's current status and counts."""
-        return _parse(BatchJob.from_dict, self._data("GET", f"/verify/batch/{batch_id}"))
+        return self._batch_status(batch_id)
+
+    def _batch_status(self, batch_id: int | str, *, retry_budget: float | None = None) -> BatchJob:
+        data = self._data("GET", f"/verify/batch/{batch_id}", retry_budget=retry_budget)
+        return _parse(BatchJob.from_dict, data)
 
     def wait_for_batch(
         self,
@@ -406,23 +549,17 @@ class MailTester:
         """Poll until the batch is completed, backing off from `interval` to `max_interval`.
 
         Raises BatchNotStartedError on "pending", BatchFailedError on a failure status, and
-        BatchTimeoutError after `timeout` seconds. A 429 waits for `retry_after` (or
-        `max_interval`); if that wait would pass the deadline, the RateLimitError propagates.
-        Other errors propagate too.
+        BatchTimeoutError after `timeout` seconds. A 429 while polling goes through the retry
+        policy with its waits capped by the time left; one that would pass the deadline raises
+        RateLimitError without sleeping. Other errors propagate too.
         """
         if interval <= 0 or max_interval <= 0 or timeout < 0:
             raise ValueError("interval and max_interval must be positive, timeout non-negative")
         deadline = self._clock() + timeout
         delay = interval
         while True:
-            try:
-                job = self.batch_status(batch_id)
-            except RateLimitError as exc:
-                wait = exc.retry_after if exc.retry_after and exc.retry_after > 0 else max_interval
-                if self._clock() + wait > deadline:
-                    raise
-                self._sleep(wait)
-                continue
+            budget = min(self.max_retry_wait, max(deadline - self._clock(), 0.0))
+            job = self._batch_status(batch_id, retry_budget=budget)
             if job.status == "pending":
                 raise BatchNotStartedError(job)
             if on_poll is not None:

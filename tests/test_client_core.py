@@ -27,9 +27,12 @@ FIXTURES = Path(__file__).parent / "fixtures" / "api"
 CREDITS = f"{BASE_URL}/credits"
 
 
+# Retries are off in these helpers: they test the error mapping; test_retry.py tests retries.
+
+
 def raised(respx_mock, name, api_key="evp_test"):
     serve(respx_mock, name, CREDITS)
-    mt = MailTester(api_key=api_key)
+    mt = MailTester(api_key=api_key, max_retries=0)
     with pytest.raises(MailTesterError) as info:
         mt._data("GET", "/credits")
     return mt, info.value
@@ -38,7 +41,7 @@ def raised(respx_mock, name, api_key="evp_test"):
 def raised_inline(respx_mock, status, **respond):
     respx_mock.get(CREDITS).respond(status, **respond)
     with pytest.raises(MailTesterError) as info:
-        MailTester(api_key="evp_test")._data("GET", "/credits")
+        MailTester(api_key="evp_test", max_retries=0)._data("GET", "/credits")
     return info.value
 
 
@@ -98,7 +101,7 @@ def test_malformed_key_raises_without_echoing_it(key):
 def test_transport_error_message_masks_the_key(respx_mock):
     respx_mock.get(CREDITS).mock(side_effect=httpx.LocalProtocolError("bad header Bearer evp_k"))
     with pytest.raises(APIConnectionError) as info:
-        MailTester(api_key="evp_k")._data("GET", "/credits")
+        MailTester(api_key="evp_k", max_retries=0)._data("GET", "/credits")
     assert "evp_k" not in str(info.value)
     assert "***" in str(info.value)
 
@@ -121,7 +124,7 @@ def test_unparseable_reset_header_is_ignored():
 def test_retry_after_accepts_numbers_strings_and_header(respx_mock, body, headers, expected):
     respx_mock.get(CREDITS).respond(429, json={"success": False, **body}, headers=headers)
     with pytest.raises(RateLimitError) as info:
-        MailTester(api_key="evp_test")._data("GET", "/credits")
+        MailTester(api_key="evp_test", max_retries=0)._data("GET", "/credits")
     assert info.value.retry_after == expected
 
 
@@ -424,7 +427,7 @@ def test_rate_limit_ignores_non_integer_headers(respx_mock):
 
 def test_connect_error(respx_mock):
     respx_mock.get(CREDITS).mock(side_effect=httpx.ConnectError("connection refused"))
-    mt = MailTester(api_key="evp_secret")
+    mt = MailTester(api_key="evp_secret", max_retries=0)
     with pytest.raises(APIConnectionError) as info:
         mt._data("GET", "/credits")
     e = info.value
@@ -439,14 +442,14 @@ def test_connect_error(respx_mock):
 def test_read_timeout(respx_mock):
     respx_mock.get(CREDITS).mock(side_effect=httpx.ReadTimeout("timed out"))
     with pytest.raises(APIConnectionError) as info:
-        MailTester(api_key="evp_test")._data("GET", "/credits")
+        MailTester(api_key="evp_test", max_retries=0)._data("GET", "/credits")
     assert isinstance(info.value.__cause__, httpx.ReadTimeout)
 
 
 def test_empty_transport_message_uses_class_name(respx_mock):
     respx_mock.get(CREDITS).mock(side_effect=httpx.ReadTimeout(""))
     with pytest.raises(APIConnectionError) as info:
-        MailTester(api_key="evp_test")._data("GET", "/credits")
+        MailTester(api_key="evp_test", max_retries=0)._data("GET", "/credits")
     assert str(info.value) == "Could not reach MailTester: ReadTimeout"
 
 

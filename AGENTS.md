@@ -22,13 +22,13 @@ src/mailtester_cli/
     account.py  # credits
     lists.py    # the lists group: the table, lists show, lists delete
     batch.py    # batch submit/upload/status/wait/results
-  client.py     # MailTester: key loading, httpx, envelope, error mapping, rate limits
+  client.py     # MailTester: key loading, httpx, retries, envelope, error mapping, rate limits
   errors.py     # MailTesterError hierarchy
   models.py     # response types: VerifyResult, BatchJob, FinderResult, RoleFinderResult, Credits, ListJob, ListPage, ...
   __init__.py   # __version__ and the MailTester export
   __main__.py   # python -m support
 tests/          # pytest suite, never hits the live API
-  conftest.py   # load_fixture / load_request / serve / sent_json / sent_form helpers and the mt fixture
+  conftest.py   # load_fixture / load_request / serve / sent_json / sent_form helpers, the mt and clock fixtures, and a guard that fails any test that sleeps for real
   test_cli_verify_find.py  # verify, find, global --json, error mapping
   test_cli_finder.py       # find-domain, find-company
   test_cli_account.py      # credits
@@ -74,7 +74,7 @@ Planned work is tracked as GitHub Issues on `austinogilvie/mailtester-cli`, view
 | `lists delete <id>...` | `DELETE /lists/{id}`, once per id. Returns `200 {"success": true, "message": "List deleted"}` with no `data`, after which `batch status` on that id is `404`. The docs mention a `409` for a list that's still processing; its message is unverified. `error_409_list_processing` stays synthetic on purpose, because provoking it needs a processing list, which costs 1 credit. Deleting a list deletes its results. | `lists:write` (unconfirmed) | free |
 | `credits` | `GET /credits` | `credits:read` | free |
 
-Batch flow: submit, keep the returned `id`, poll `batch status` until `status` is `completed`, then fetch `batch results`. Statuses seen so far are `pending` (only with `auto_start: false`; such a batch never starts on its own), `processing`, and `completed`. A 3-email batch took about 30s and an 8-email batch 42s. Poll gently (every few seconds, with backoff) to stay under the rate limit. A `--wait` flag on `batch submit` runs the whole flow in one command, and `batch upload` does the same for a file, and `batch wait <id>` resumes waiting on any batch. `wait_for_batch` raises `BatchNotStartedError` as soon as a poll returns `pending`, because such a batch never starts on its own. Invalid `format`/`filter` values return `422`. `GET /lists/{id}` and `DELETE /lists/{id}` back `lists show` and `lists delete`; see the table. The API offers more endpoints (webhooks, deliverability, analytics). Add them only when asked, and check the exact request and response shapes against the docs instead of guessing.
+Batch flow: submit, keep the returned `id`, poll `batch status` until `status` is `completed`, then fetch `batch results`. Statuses seen so far are `pending` (only with `auto_start: false`; such a batch never starts on its own), `processing`, and `completed`. A 3-email batch took about 30s and an 8-email batch 42s. Poll gently (every few seconds, with backoff) to stay under the rate limit. A `--wait` flag on `batch submit` runs the whole flow in one command, and `batch upload` does the same for a file, and `batch wait <id>` resumes waiting on any batch. `wait_for_batch` raises `BatchNotStartedError` as soon as a poll returns `pending`, because such a batch never starts on its own; a `429` while polling goes through the client's retry policy, capped by the remaining deadline. Invalid `format`/`filter` values return `422`. `GET /lists/{id}` and `DELETE /lists/{id}` back `lists show` and `lists delete`; see the table. The API offers more endpoints (webhooks, deliverability, analytics). Add them only when asked, and check the exact request and response shapes against the docs instead of guessing.
 
 ### Verdicts
 
@@ -104,7 +104,7 @@ Show the raw values, and don't try to make the two match. Disposable addresses c
 - `422` usually carries an `errors` map keyed by field (`email`, `timeout`, `emails.0`, `emails.1`, ...), but the finder's no-MX case carries a plain `error` string instead. Handle both.
 - Only `401`, `404`, `422`, and `400` have been captured live. The `402`, `429`, `500`, and `502` fixtures are built from the docs, and the units of `retry_after` are assumed to be seconds.
 - The default rate limit is 60 requests/min per key, but a key's window can be per minute, hour, or day. Responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`. `X-RateLimit-Reset` is a Unix timestamp, and it's missing on `401` responses.
-- On a `429`, respect `retry_after` and don't hammer the API.
+- The client retries a `429` after `retry_after` (then the seconds until `X-RateLimit-Reset`, then a 1, 2, 4... backoff), connection failures, and `5xx` on `GET`/`DELETE`, at most `max_retries` (2) times and `max_retry_wait` (60s) in total, in `_request`. Commands never add retry loops; a `POST` is never replayed after a `5xx` or a read timeout. The CLI prints one stderr line per retry through `on_retry`.
 
 ## CLI conventions
 

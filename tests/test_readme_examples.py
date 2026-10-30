@@ -176,7 +176,7 @@ def test_lists_pages_show_delete(respx_mock, mt):
     assert mt.delete_list(1287) == "List deleted"
 
 
-def test_errors(respx_mock, mt):
+def test_errors(respx_mock, mt, clock):
     from mailtester_cli.errors import (
         AuthenticationError,
         InsufficientCreditsError,
@@ -190,7 +190,7 @@ def test_errors(respx_mock, mt):
         except InsufficientCreditsError as e:
             return f"Out of credits ({e.available_credits} left)"
         except RateLimitError as e:
-            return f"Slow down, retry in {e.retry_after}s"
+            return f"Still rate limited after retrying; try again in {e.retry_after}s"
         except MailTesterError as e:
             return f"MailTester error: {e}"
         return "no error"
@@ -198,7 +198,7 @@ def test_errors(respx_mock, mt):
     route = respx_mock.post(f"{BASE_URL}/verify")
     expected = {
         "error_402": "Out of credits (0 left)",
-        "error_429": "Slow down, retry in 30s",
+        "error_429": "Still rate limited after retrying; try again in 30s",
         "error_401": f"MailTester error: {load_fixture('error_401')[2]['error']}",
     }
     for name, message in expected.items():
