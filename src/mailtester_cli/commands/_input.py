@@ -39,14 +39,18 @@ def credits(count: int) -> str:
     return f"{fmt_int(count)} credit{'' if count == 1 else 's'}"
 
 
-def confirm_spend(count: int, cost: str, *, stdin: bool, yes: bool) -> None:
+def confirm_spend(
+    count: int, cost: str, *, stdin: bool, yes: bool, note: str | None = None
+) -> None:
     """At CONFIRM_THRESHOLD addresses or more, ask before spending `cost` unless `yes`.
 
-    Exits 1 on no. Stdin can't both hold the addresses and answer the prompt, so reading
-    from it needs `yes` at that size.
+    `note`, when given, goes to stderr just before the question. Exits 1 on no. Stdin can't
+    both hold the addresses and answer the prompt, so reading from it needs `yes` at that size.
     """
     if count < CONFIRM_THRESHOLD or yes:
         return
+    if note:
+        typer.echo(note, err=True)
     if stdin:
         fail(f"Pass --yes to confirm spending {cost} when reading from stdin.")
     if not confirm("Continue?"):

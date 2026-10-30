@@ -7,7 +7,6 @@ import typer
 
 from mailtester_cli.client import MailTester
 from mailtester_cli.commands._input import (
-    CONFIRM_THRESHOLD,
     confirm_spend,
     credits,
     read_addresses,
@@ -84,14 +83,12 @@ def verify(
         fail(f"No email addresses in {source_name(file)}." if file else "No email addresses.")
     cost = credits(count * VERIFY_COST)
     typer.echo(f"This will use {cost}.", err=True)
-    if count >= CONFIRM_THRESHOLD and not yes:
-        minutes = math.ceil(count / RATE_PER_MINUTE)
-        typer.echo(
-            f"Tip: {fmt_int(count)} addresses take about {minutes} minutes one at a time; "
-            "batch submit is faster for a list this size.",
-            err=True,
-        )
-    confirm_spend(count, cost, stdin=file == "-", yes=yes)
+    minutes = math.ceil(count / RATE_PER_MINUTE)
+    tip = (
+        f"Tip: {fmt_int(count)} addresses take about {minutes} minutes one at a time; "
+        "batch submit is faster for a list this size."
+    )
+    confirm_spend(count, cost, stdin=file == "-", yes=yes, note=tip)
 
     smtp_check = False if no_smtp else None
     with handle_errors(), client() as mt:
@@ -118,7 +115,8 @@ def _verify_many(
     """Verify each address in order, printing a line (or JSON Line) as each answer arrives.
 
     A 422 belongs to one address: it's reported and the run goes on. Any other error would
-    hit every remaining address too, so it stops the run with a count of what was verified.
+    hit every remaining address too, so it stops the run, naming the address it stopped at
+    (that request went out and may have been charged) and counting the ones after it.
     Returns whether any address failed.
     """
     as_json = get_state(ctx).json
@@ -141,13 +139,10 @@ def _verify_many(
                     typer.echo(_format_line(result, width))
             sent += 1
     except MailTesterError as exc:
-        left = count - sent
+        left = count - sent - 1  # after the address that failed
+        stopped = f"stopped at {email}, {left} not sent" if left else f"stopped at {email}"
         typer.echo(f"Error: {error_message(exc)}", err=True)
-        typer.echo(
-            f"Verified {verified} of {count} addresses; "
-            f"{left} {'was' if left == 1 else 'were'} not sent.",
-            err=True,
-        )
+        typer.echo(f"Verified {verified} of {count} addresses; {stopped}.", err=True)
         raise typer.Exit(1) from None
     except KeyboardInterrupt:
         typer.echo(f"Interrupted. Verified {verified} of {count} addresses.", err=True)

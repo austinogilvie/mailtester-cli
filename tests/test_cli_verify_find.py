@@ -326,7 +326,7 @@ def test_verify_402_stops(respx_mock, api_key):
     assert result.stdout == THREE_LINES[0] + "\n"
     assert result.stderr.endswith(
         "Error: Insufficient credits (available credits: 0)\n"
-        "Verified 1 of 3 addresses; 2 were not sent.\n"
+        "Verified 1 of 3 addresses; stopped at nobody@freemail.example, 1 not sent.\n"
     )
     assert route.call_count == 2
 
@@ -339,8 +339,17 @@ def test_verify_stop_after_a_422_counts_only_verdicts(respx_mock, api_key):
     assert result.exit_code == 1
     assert result.stdout == ""
     assert result.stderr.endswith(
-        "Error: Invalid API key\nVerified 0 of 4 addresses; 3 were not sent.\n"
+        "Error: Invalid API key\n"
+        "Verified 0 of 4 addresses; stopped at batch1@example.com, 2 not sent.\n"
     )
+
+
+def test_verify_stop_at_the_last_address(respx_mock, api_key):
+    respx_mock.post(VERIFY).mock(side_effect=[*three_verdicts()[:2], fixture_response("error_500")])
+    result = runner.invoke(app, ["verify", *THREE])
+    assert result.exit_code == 1
+    assert result.stdout.splitlines() == THREE_LINES[:2]
+    assert result.stderr.endswith("Verified 2 of 3 addresses; stopped at nobody@nomx.invalid.\n")
 
 
 def test_verify_429_stops_after_the_client_retries(respx_mock, api_key, clock):
@@ -353,7 +362,7 @@ def test_verify_429_stops_after_the_client_retries(respx_mock, api_key, clock):
         "This will use 3 credits.\n"
         + "Rate limited, retrying in 30s...\n" * 2
         + "Error: Rate limit exceeded. Retry in 30s.\n"
-        + "Verified 1 of 3 addresses; 2 were not sent.\n"
+        + "Verified 1 of 3 addresses; stopped at nobody@freemail.example, 1 not sent.\n"
     )
     assert clock.sleeps == [30, 30]
 
