@@ -82,7 +82,7 @@ mailtester --json verify jane@acme.com | jq .result
 
 ### Verify a batch
 
-The input file holds one address per line, and blank lines are skipped. `batch submit` prints the cost to stderr. For 100 or more addresses it asks before submitting, unless you pass `--yes`. Use `-` to read from stdin, which needs `--yes` for 100 or more addresses because stdin can't answer the prompt. `--callback-url URL` asks MailTester to call that URL when the batch completes; the CLI only passes it along and doesn't receive webhooks.
+The input file holds one address per line, and blank lines are skipped. Repeated addresses are dropped before the cost is counted, ignoring case, and `batch submit` says how many it skipped, so a repeat never costs a second credit. `batch submit` prints the cost to stderr. For 100 or more addresses it asks before submitting, unless you pass `--yes`. Use `-` to read from stdin, which needs `--yes` for 100 or more addresses because stdin can't answer the prompt. `--callback-url URL` asks MailTester to call that URL when the batch completes; the CLI only passes it along and doesn't receive webhooks.
 
 ```text
 $ mailtester batch submit leads.txt --name "Q3 leads"

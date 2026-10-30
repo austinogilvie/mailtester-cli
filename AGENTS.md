@@ -17,6 +17,7 @@ src/mailtester_cli/
   commands/
     __init__.py # empty
     _shared.py  # State, client(), handle_errors, confirm, print_json, fmt_int, fail
+    _input.py   # read_addresses (args + file/stdin, dedupe), confirm_spend, CONFIRM_THRESHOLD
     verify.py   # verify
     finder.py   # find, find-domain, find-company
     account.py  # credits

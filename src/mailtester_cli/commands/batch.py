@@ -1,6 +1,5 @@
 """The `batch` group: submit, upload, status, wait, and results."""
 
-import sys
 from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -8,6 +7,13 @@ from urllib.parse import urlsplit
 import typer
 
 from mailtester_cli.client import MAX_BATCH_EMAILS, MAX_UPLOAD_BYTES, MailTester
+from mailtester_cli.commands._input import (
+    CONFIRM_THRESHOLD,
+    confirm_spend,
+    credits,
+    read_addresses,
+    source_name,
+)
 from mailtester_cli.commands._shared import (
     client,
     confirm,
@@ -27,7 +33,6 @@ from mailtester_cli.errors import (
 )
 from mailtester_cli.models import BatchJob
 
-CONFIRM_THRESHOLD = 100
 DEFAULT_WAIT_TIMEOUT = 1800
 
 batch_app = typer.Typer(
@@ -57,21 +62,6 @@ WAIT_FILTER_OPTION = typer.Option(
 WAIT_FORMAT_OPTION = typer.Option(
     None, "--format", help="With --wait: output format (default json)."
 )
-
-
-def _read_emails(file: str) -> list[str]:
-    """Read one address per line from `file` (or stdin for `-`), skipping blank lines."""
-    source = "stdin" if file == "-" else file
-    try:
-        data = sys.stdin.buffer.read() if file == "-" else Path(file).read_bytes()
-        text = data.decode("utf-8-sig")
-    except FileNotFoundError:
-        fail(f"File not found: {file}")
-    except UnicodeDecodeError:
-        fail(f"Could not read {source}: it isn't UTF-8 text.")
-    except OSError as exc:
-        fail(f"Could not read {source}: {exc.strerror or exc}")
-    return [line for line in (raw.strip() for raw in text.splitlines()) if line]
 
 
 def _count_text_lines(data: bytes) -> int | None:
@@ -182,20 +172,15 @@ def submit(
     _check_callback_url(callback_url)
     if not wait and (timeout, filter_, format_) != (None, None, None):
         fail("--timeout, --filter, and --format only apply with --wait.", code=2)
-    emails = _read_emails(file)
+    emails = read_addresses([], file)
     count = len(emails)
     if count == 0:
-        fail(f"No email addresses in {'stdin' if file == '-' else file}.")
+        fail(f"No email addresses in {source_name(file)}.")
     if count > MAX_BATCH_EMAILS:
         fail(f"emails must hold 1 to {MAX_BATCH_EMAILS:,} addresses (got {count:,})")
-    cost = f"{fmt_int(count)} credit{'' if count == 1 else 's'}"
+    cost = credits(count)
     typer.echo(f"This will use up to {cost}.", err=True)
-    if count >= CONFIRM_THRESHOLD and not yes:
-        if file == "-":
-            fail(f"Pass --yes to confirm spending {cost} when reading from stdin.")
-        if not confirm("Continue?"):
-            typer.echo("Aborted.", err=True)
-            raise typer.Exit(1)
+    confirm_spend(count, cost, stdin=file == "-", yes=yes)
 
     with handle_errors(), client() as mt:
         job = mt.submit_batch(emails, name=name, callback_url=callback_url)
@@ -268,8 +253,7 @@ def upload(
             err=True,
         )
     else:
-        cost = f"{fmt_int(count)} credit{'' if count == 1 else 's'}"
-        typer.echo(f"This will use up to {cost}.", err=True)
+        typer.echo(f"This will use up to {credits(count)}.", err=True)
     needs_confirm = (count is None or count >= CONFIRM_THRESHOLD) and not yes
     if needs_confirm and not confirm("Continue?"):
         typer.echo("Aborted.", err=True)
