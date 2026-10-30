@@ -39,7 +39,7 @@ scripts/
   discover.py   # recaptures the fixtures (paid calls need --spend)
 ```
 
-Planned work is tracked in `.specs/BOARD.md`, with one file per SPEC/FEAT/BUG in `.specs/`. The board explains the naming and status conventions.
+Planned work is tracked as GitHub Issues on `austinogilvie/mailtester-cli`, viewed on the "mailtester-cli Roadmap" project board. `.claude/skills/issues/SKILL.md` has the conventions (kind labels, Status, Priority, `Closes #n` in PR bodies) and `.claude/skills/issues/scripts/issue.sh` files, links, boards, and audits issues; hooks in `.claude/hooks/` enforce them. The repo and its issues are public: never put a real address, domain, company, person, key, or balance tied to an account into an issue, PR, comment, or release note; use the fixtures' redacted vocabulary (`example.com`, `*.invalid`, `*.example`). A guard hook blocks the mechanical cases.
 
 `README.md` defines the target CLI and Python interface. Build toward it, and update the README in the same change if the interface has to differ.
 
@@ -55,7 +55,7 @@ Planned work is tracked in `.specs/BOARD.md`, with one file per SPEC/FEAT/BUG in
 - Auth: `Authorization: Bearer evp_...` on every request.
 - Responses are JSON. Success: `{ "success": true, "data": ... }`, with status `200` (`201` for `POST /verify/batch`). Paginated responses add a top-level `meta: {current_page, last_page, per_page, total}`. Error: `{ "success": false, "error": "<message string>" }`. Validation errors (422) use `errors` (a field-to-messages map, which also covers query params) instead of `error`.
 - Timestamps are ISO-8601 UTC.
-- Real, redacted responses live in `tests/fixtures/api/`, captured by `scripts/discover.py`. Findings and remaining unknowns are in `.specs/002-FEAT-API-DISCOVERY.md`. Check the fixtures before assuming a field exists.
+- Real, redacted responses live in `tests/fixtures/api/`, captured by `scripts/discover.py`. Findings and remaining unknowns are in issues #10, #14, and #17 (the three discovery runs). Check the fixtures before assuming a field exists.
 
 ### Endpoints in scope
 
