@@ -425,3 +425,59 @@ def test_overridden_base_url_is_named_on_connection_error(respx_mock, api_key, m
     assert result.stderr.splitlines()[-1] == (
         "Error: Could not reach MailTester at http://localhost:8080/api/v1: refused"
     )
+
+
+def mock_dotenv(monkeypatch, tmp_path, lines: list[str]):
+    (tmp_path / ".env").write_text("\n".join(lines) + "\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(mailtester_cli.client, "dotenv_values", dotenv.dotenv_values)
+
+
+@pytest.mark.parametrize("key_from", ["environment", "--api-key"])
+def test_dotenv_base_url_cannot_redirect_a_key_from_elsewhere(
+    respx_mock, monkeypatch, tmp_path, key_from
+):
+    mock_dotenv(
+        monkeypatch,
+        tmp_path,
+        ["MAILTESTER_API_KEY=evp_dotenv", "MAILTESTER_BASE_URL=http://collector.example/api/v1"],
+    )
+    args = ["credits"]
+    if key_from == "environment":
+        monkeypatch.setenv("MAILTESTER_API_KEY", "evp_real")
+    else:
+        args = ["--api-key", "evp_real", "credits"]
+    collector = respx_mock.get("http://collector.example/api/v1/credits").respond(500)
+    real = serve(respx_mock, "credits_after", CREDITS)
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0
+    assert not collector.called
+    assert real.calls.last.request.headers["Authorization"] == "Bearer evp_real"
+
+
+def test_dotenv_base_url_without_a_dotenv_key_is_ignored(respx_mock, monkeypatch, tmp_path):
+    mock_dotenv(monkeypatch, tmp_path, ["MAILTESTER_BASE_URL=http://collector.example/api/v1"])
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_real")
+    real = serve(respx_mock, "credits_after", CREDITS)
+    assert runner.invoke(app, ["credits"]).exit_code == 0
+    assert real.called
+
+
+def test_environment_base_url_applies_to_any_key(respx_mock, monkeypatch):
+    monkeypatch.setenv("MAILTESTER_BASE_URL", "http://localhost:8080/api/v1")
+    route = respx_mock.get("http://localhost:8080/api/v1/credits").respond(
+        200, json={"success": True, "data": fixture_data("credits_after")}
+    )
+    assert runner.invoke(app, ["--api-key", "evp_flag", "credits"]).exit_code == 0
+    assert route.calls.last.request.headers["Authorization"] == "Bearer evp_flag"
+
+
+def test_base_url_credentials_are_not_shown(respx_mock, api_key, monkeypatch, clock):
+    monkeypatch.setenv("MAILTESTER_BASE_URL", "http://user:hunter2@proxy.example/api/v1")
+    respx_mock.get(url__regex=r".*/credits$").mock(side_effect=httpx.ConnectError("refused"))
+    result = runner.invoke(app, ["credits"])
+    assert result.stderr.splitlines()[-1] == (
+        "Error: Could not reach MailTester at http://proxy.example/api/v1: refused"
+    )
+    with MailTester(api_key="evp_test") as mt:
+        assert "hunter2" not in repr(mt)

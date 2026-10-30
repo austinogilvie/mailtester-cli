@@ -34,7 +34,7 @@ MAILTESTER_API_KEY=evp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 `--api-key` (before the command, like `--json`) wins over the environment variable, which wins over `.env`. `mailtester` looks for `.env` in the directory you run it from (and its parents), so an installed `mailtester` still finds your project's key. `--api-key` shows up in process lists and shell history, so prefer the variable for anything long-lived.
 
-To point the client at a proxy, a staging host, or a local mock, set `MAILTESTER_BASE_URL` (for example `http://localhost:8080/api/v1`) in the environment or `.env`.
+To point the client at a proxy, a staging host, or a local mock, set `MAILTESTER_BASE_URL` (for example `http://localhost:8080/api/v1`) in the environment or `.env`. A `MAILTESTER_BASE_URL` in `.env` counts only when the key comes from the same `.env`, so a `.env` in some other project's directory can't send the key from your environment or `--api-key` to its own host.
 
 ## CLI
 

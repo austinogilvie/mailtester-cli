@@ -148,29 +148,52 @@ def _int_header(headers: httpx.Headers, name: str) -> int | None:
 
 
 class _Settings:
-    """Our variables from the environment, else the user's `.env`, read at most once."""
+    """Our variables from the environment, or from the user's `.env`, read at most once."""
 
     def __init__(self) -> None:
         self._dotenv: dict[str, str | None] | None = None
 
-    def get(self, name: str) -> str | None:
-        value = os.environ.get(name, "").strip()
-        if value:
-            return value
+    def env(self, name: str) -> str | None:
+        return os.environ.get(name, "").strip() or None
+
+    def dotenv(self, name: str) -> str | None:
         if self._dotenv is None:
             # usecwd finds the user's .env after `uv tool install`.
             self._dotenv = dotenv_values(find_dotenv(usecwd=True))
         return (self._dotenv.get(name) or "").strip() or None
 
 
-def _resolve_base_url(base_url: str | None, settings: _Settings) -> str:
-    """The argument, then MAILTESTER_BASE_URL from the environment, then `.env`, then BASE_URL."""
-    url = (base_url or "").strip() or settings.get(BASE_URL_ENV_VAR) or BASE_URL
-    return url.rstrip("/")
+def _resolve_base_url(base_url: str | None, settings: _Settings, *, key_from_dotenv: bool) -> str:
+    """The argument, then MAILTESTER_BASE_URL from the environment, then `.env`, then BASE_URL.
+
+    `.env` counts only when the key came from that same file. Otherwise a `.env` in whatever
+    directory the CLI runs in could send a key from the environment or `--api-key` to its own
+    host; this way a `.env` can only redirect the key it supplies.
+    """
+    url = (base_url or "").strip() or settings.env(BASE_URL_ENV_VAR)
+    if not url and key_from_dotenv:
+        url = settings.dotenv(BASE_URL_ENV_VAR)
+    return (url or BASE_URL).rstrip("/")
 
 
-def _resolve_key(api_key: str | None, settings: _Settings) -> str:
-    key = (api_key or "").strip() or settings.get(ENV_VAR)
+def _display_url(url: str) -> str:
+    """`url` without any `user:password@`, for messages and repr."""
+    try:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL:
+        return url
+    return str(parsed.copy_with(userinfo=b"")) if parsed.userinfo else url
+
+
+def _resolve_key(api_key: str | None, settings: _Settings) -> tuple[str, bool]:
+    """The argument, then MAILTESTER_API_KEY from the environment, then `.env`.
+
+    Returns the key and whether it came from `.env`.
+    """
+    key = (api_key or "").strip() or settings.env(ENV_VAR)
+    from_dotenv = key is None
+    if from_dotenv:
+        key = settings.dotenv(ENV_VAR)
     if key is None:
         raise MissingAPIKeyError(
             f"{ENV_VAR} is not set. Set it in your environment or in a .env file."
@@ -180,7 +203,7 @@ def _resolve_key(api_key: str | None, settings: _Settings) -> str:
         raise MissingAPIKeyError(
             f"{ENV_VAR} contains spaces, line breaks, or other invalid characters."
         )
-    return key
+    return key, from_dotenv
 
 
 def _parse(build: Callable[[Any], T], data: Any, *, body: dict | None = None) -> T:
@@ -239,13 +262,13 @@ class MailTester:
         ):
             raise ValueError(f"max_retry_wait must be a number >= 0 (got {max_retry_wait!r})")
         settings = _Settings()
-        self._api_key = _resolve_key(api_key, settings)
+        self._api_key, key_from_dotenv = _resolve_key(api_key, settings)
         self._headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Accept": "application/json",
             "User-Agent": f"mailtester-cli/{__version__}",
         }
-        self.base_url = _resolve_base_url(base_url, settings)
+        self.base_url = _resolve_base_url(base_url, settings, key_from_dotenv=key_from_dotenv)
         self.timeout = timeout
         self.max_retries = max_retries
         self.max_retry_wait = float(max_retry_wait)
@@ -255,7 +278,7 @@ class MailTester:
         self._client = http_client if http_client is not None else httpx.Client(timeout=timeout)
 
     def __repr__(self) -> str:
-        return f"MailTester(base_url={self.base_url!r})"
+        return f"MailTester(base_url={_display_url(self.base_url)!r})"
 
     def __enter__(self) -> MailTester:
         return self
@@ -342,7 +365,7 @@ class MailTester:
         except httpx.TransportError as exc:
             detail = (str(exc) or type(exc).__name__).replace(self._api_key, "***")
             # Name the host only when it was overridden: that's the one a user may have mistyped.
-            where = "" if self.base_url == BASE_URL else f" at {self.base_url}"
+            where = "" if self.base_url == BASE_URL else f" at {_display_url(self.base_url)}"
             raise APIConnectionError(f"Could not reach MailTester{where}: {detail}") from exc
         self.rate_limit = RateLimit.from_headers(response.headers)
         if not response.is_success:
