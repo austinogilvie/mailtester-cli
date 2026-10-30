@@ -1,0 +1,47 @@
+name: Spec
+description: A design or plan to be refined before implementation. Child tasks hang off it.
+title: "[Spec] "
+labels: ["spec"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What this is and why it matters, in a paragraph.
+    validations:
+      required: true
+  - type: textarea
+    id: goals
+    attributes:
+      label: Goals and non-goals
+      placeholder: |
+        Goals:
+        - ...
+        Non-goals:
+        - ...
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Background and context
+      description: What exists today, what's wrong with it, links to related docs/issues.
+  - type: textarea
+    id: design
+    attributes:
+      label: Proposed design
+      description: Commands and usage lines, config and env vars, external APIs and data sources — whatever the change touches.
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and open questions
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] ...
+    validations:
+      required: true

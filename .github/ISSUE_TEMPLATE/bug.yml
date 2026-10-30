@@ -1,0 +1,42 @@
+name: Bug
+description: Something that worked, or should work, and doesn't.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What's broken, who it affects, how badly.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact command(s) or actions that trigger it.
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Version or commit, runtime versions, and your OS.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Full output, tracebacks, API error responses. Redact tokens.
+  - type: textarea
+    id: cause
+    attributes:
+      label: Root cause (if known) and fixes attempted

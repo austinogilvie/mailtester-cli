@@ -1,0 +1,45 @@
+name: Feature
+description: A new user-facing capability or enhancement.
+title: "[Feature] "
+labels: ["feature"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+      description: One or two sentences on the capability and the problem it solves.
+    validations:
+      required: true
+  - type: textarea
+    id: who
+    attributes:
+      label: Who it's for
+      placeholder: "As a <developer / sales-ops user / script> using mailtester, I want <capability> so that <outcome>."
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Current vs proposed behavior
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Requirements
+      placeholder: |
+        Must:
+        - ...
+        Should:
+        - ...
+        Nice to have:
+        - ...
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Related issues, specs, docs, or screenshots.

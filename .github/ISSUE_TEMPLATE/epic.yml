@@ -1,0 +1,42 @@
+name: Epic
+description: A multi-spec initiative. Holds the "why" and the ground rules; specs hang off it as sub-issues.
+title: "[Epic] "
+labels: ["epic"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: The outcome this initiative exists to produce, and for whom.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why now
+      description: The decision or deadline this serves.
+  - type: textarea
+    id: rules
+    attributes:
+      label: Ground rules
+      description: Constraints every spec under this epic inherits (safety, data handling, scope limits).
+    validations:
+      required: true
+  - type: textarea
+    id: specs
+    attributes:
+      label: Specs
+      description: The specs that make up this epic, in dependency order. Link them as sub-issues too.
+      placeholder: |
+        1. #NN — ...
+        2. #NN — ... (depends on 1)
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      placeholder: |
+        - [ ] ...
+    validations:
+      required: true

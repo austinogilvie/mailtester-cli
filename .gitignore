@@ -32,7 +32,6 @@ env/
 # Project-specific directories
 tmp/
 data/
-spec/
 
 # Testing
 .pytest_cache/
@@ -59,7 +58,7 @@ htmlcov/
 # Environment variables
 .env
 .env.local
+.claude/local/
 
 # Distribution / packaging
 *.whl
-.specs
