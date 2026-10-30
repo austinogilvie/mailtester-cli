@@ -5,7 +5,7 @@ from typer.core import TyperGroup
 
 from mailtester_cli import __version__
 from mailtester_cli.commands import account, batch, finder, lists, verify
-from mailtester_cli.commands._shared import State
+from mailtester_cli.commands._shared import State, set_state
 
 COMMAND_ORDER = ["verify", "batch", "find", "find-domain", "find-company", "lists", "credits"]
 
@@ -47,7 +47,7 @@ def main(
     ),
 ) -> None:
     """Verify and find email addresses with the MailTester API."""
-    ctx.obj = State(json=json_output)
+    set_state(ctx, State(json=json_output))
 
 
 verify.register(app)

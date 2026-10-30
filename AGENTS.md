@@ -16,7 +16,7 @@ src/mailtester_cli/
   cli.py        # Typer app, global options, command registration
   commands/
     __init__.py # empty
-    _shared.py  # State, client(), handle_errors, confirm, print_json, fmt_int, fail
+    _shared.py  # State, get_state/set_state, client(), handle_errors, fail, report_error, error_object, confirm, print_json, fmt_int
     _input.py   # read_addresses (args + file/stdin, dedupe), confirm_spend, CONFIRM_THRESHOLD
     verify.py   # verify (one address or many)
     finder.py   # find, find-domain, find-company
@@ -110,7 +110,8 @@ Show the raw values, and don't try to make the two match. Disposable addresses c
 ## CLI conventions
 
 - Human-readable output by default. A `--json` flag prints the raw `data` payload for piping to `jq`.
-- Send errors to stderr and exit non-zero. Print the API's error message instead of a stack trace.
+- Send errors to stderr and exit non-zero. Print the API's error message instead of a stack trace. Every error goes through `fail` (or `report_error` for one item of many): `Error: ...` in text mode, one `error_object` JSON line under `--json` (`error`, `type`, `status_code`, then `errors`, `available_credits`, `retry_after`, `hint` when present). Notes (cost, retries, progress, `Aborted.`, `Interrupted.`) stay text in both modes, so under `--json` the last stderr line of a failed command is the error object.
+- Exit codes: `0` success, `1` error, `2` usage, `3` a `verify` verdict matched `--fail-on`, `130` interrupted.
 - Every command that spends credits says what it will cost on stderr. At 100 addresses or more (`CONFIRM_THRESHOLD`), `verify` and `batch submit` ask for confirmation unless `--yes` is passed.
 - Commands that read many addresses (`verify`, `batch submit`) go through `read_addresses`, which drops case-insensitive repeats so a repeat never costs a second credit.
 - Keep the HTTP client in one module, separate from command definitions, so commands stay thin.

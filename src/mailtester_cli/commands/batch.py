@@ -17,7 +17,6 @@ from mailtester_cli.commands._input import (
 from mailtester_cli.commands._shared import (
     client,
     confirm,
-    error_message,
     fail,
     fmt_int,
     get_state,
@@ -85,10 +84,6 @@ def _check_callback_url(value: str | None) -> None:
         fail("--callback-url must be an http(s) URL.", code=2)
 
 
-def _with_hint(message: str, hint: str) -> str:
-    return f"{message.rstrip('.')}. {hint}"
-
-
 def _status_line(job: BatchJob) -> str:
     progress = "-" if job.progress is None else f"{job.progress:g}%"
     counts = f"({fmt_int(job.processed_emails)}/{fmt_int(job.total_emails)})"
@@ -128,14 +123,14 @@ def _wait_and_write(
     except BatchNotStartedError as exc:
         # Never "run this again": for submit/upload --wait that would pay for a second batch.
         start = f"Start it in the MailTester app, then resume with: {wait_cmd}"
-        fail(_with_hint(str(exc), start))
+        fail(str(exc), error=exc, hint=start)
     except BatchTimeoutError as exc:
-        fail(_with_hint(str(exc), f"Resume with: {wait_cmd}"))
+        fail(str(exc), error=exc, hint=f"Resume with: {wait_cmd}")
     except (BatchFailedError, NotFoundError):
         raise
     except MailTesterError as exc:
         running = f"Batch {batch_id} may still be running. {resume_hint}"
-        fail(_with_hint(error_message(exc), running))
+        fail(str(exc), error=exc, hint=running)
     except KeyboardInterrupt:
         typer.echo(
             f"Stopped waiting. Batch {batch_id} is still running. Resume with: {wait_cmd}",
@@ -146,7 +141,7 @@ def _wait_and_write(
         _write_results(mt, batch_id, filter_, format_)
     except MailTesterError as exc:
         fetch = f"Batch {batch_id} is complete. Fetch it with: mailtester batch results {batch_id}"
-        fail(_with_hint(error_message(exc), fetch))
+        fail(str(exc), error=exc, hint=fetch)
 
 
 @batch_app.command()
@@ -340,7 +335,7 @@ def results(
             if exc.status_code != 400:
                 raise
             hint = f"Check it with: mailtester batch status {batch_id}"
-            fail(_with_hint(error_message(exc), hint))
+            fail(str(exc), error=exc, hint=hint)
 
 
 def register(app: typer.Typer) -> None:

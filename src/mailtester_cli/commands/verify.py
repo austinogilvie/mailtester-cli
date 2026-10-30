@@ -14,12 +14,12 @@ from mailtester_cli.commands._input import (
 )
 from mailtester_cli.commands._shared import (
     client,
-    error_message,
     fail,
     fmt_int,
     get_state,
     handle_errors,
     print_json,
+    report_error,
 )
 from mailtester_cli.errors import MailTesterError, ValidationError
 from mailtester_cli.models import VerifyResult
@@ -27,6 +27,8 @@ from mailtester_cli.models import VerifyResult
 FLAGS = ("disposable", "role", "free", "accept_all", "spamtrap")
 VERIFY_COST = 1  # per address, charged even with --no-smtp
 RATE_PER_MINUTE = 60  # the key's default limit, for the time estimate in the tip
+VERDICTS = ("valid", "risky", "invalid", "unknown")
+FAIL_ON_EXIT = 3
 
 # Module-level because ruff's B008 flags a call in the default of a list-typed parameter.
 EMAILS_ARGUMENT = typer.Argument(None, metavar="[EMAIL]...", help="Addresses to verify.")
@@ -55,6 +57,17 @@ def _format_line(result: VerifyResult, width: int) -> str:
     return f"{result.email:<{width}}  {result.result:<7}  {score:<9}  {result.reason}"
 
 
+def _parse_fail_on(value: str | None) -> frozenset[str]:
+    """The verdicts in a comma-separated --fail-on value; exit 2 on anything else."""
+    if value is None:
+        return frozenset()
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    for item in items or [value]:
+        if item not in VERDICTS:
+            fail(f'--fail-on accepts {", ".join(VERDICTS)} (got "{item}").', code=2)
+    return frozenset(items)
+
+
 def verify(
     ctx: typer.Context,
     emails: list[str] | None = EMAILS_ARGUMENT,
@@ -73,8 +86,15 @@ def verify(
             "Still costs 1 credit, and the API may check anyway."
         ),
     ),
+    fail_on: str | None = typer.Option(
+        None,
+        "--fail-on",
+        metavar="VERDICT[,VERDICT]",
+        help=f"Exit {FAIL_ON_EXIT} when a verdict is one of these: {', '.join(VERDICTS)}.",
+    ),
 ) -> None:
     """Verify email addresses. (1 credit each)"""
+    fail_verdicts = _parse_fail_on(fail_on)
     if not emails and file is None:
         fail("Give at least one address or --file.", code=2)
     addresses = read_addresses(emails or [], file)
@@ -98,10 +118,16 @@ def verify(
                 print_json(result.raw)
             else:
                 typer.echo(_format_verify(result))
-            return
-        failed = _verify_many(ctx, mt, addresses, timeout=timeout, smtp_check=smtp_check)
+            failed, verdicts = False, {result.result}
+        else:
+            failed, verdicts = _verify_many(
+                ctx, mt, addresses, timeout=timeout, smtp_check=smtp_check
+            )
+    # An address that got no verdict is an error, which outranks a verdict --fail-on names.
     if failed:
         raise typer.Exit(1)
+    if verdicts & fail_verdicts:
+        raise typer.Exit(FAIL_ON_EXIT)
 
 
 def _verify_many(
@@ -111,28 +137,31 @@ def _verify_many(
     *,
     timeout: int | None,
     smtp_check: bool | None,
-) -> bool:
+) -> tuple[bool, set[str]]:
     """Verify each address in order, printing a line (or JSON Line) as each answer arrives.
 
     A 422 belongs to one address: it's reported and the run goes on. Any other error would
     hit every remaining address too, so it stops the run, naming the address it stopped at
     (that request went out and may have been charged) and counting the ones after it.
-    Returns whether any address failed.
+    Under --json that count comes first, so the error object is the last stderr line.
+    Returns whether any address failed, and the verdicts seen.
     """
     as_json = get_state(ctx).json
     width = max(map(len, addresses))
     count = len(addresses)
     verified = sent = 0
     failed = False
+    verdicts: set[str] = set()
     try:
         for email in addresses:
             try:
                 result = mt.verify(email, timeout=timeout, smtp_check=smtp_check)
             except ValidationError as exc:
-                typer.echo(f"Error: {email}: {error_message(exc)}", err=True)
+                report_error(exc, prefix=f"{email}: ", email=email)
                 failed = True
             else:
                 verified += 1
+                verdicts.add(result.result)
                 if as_json:
                     typer.echo(json.dumps(result.raw, ensure_ascii=False))
                 else:
@@ -141,13 +170,18 @@ def _verify_many(
     except MailTesterError as exc:
         left = count - sent - 1  # after the address that failed
         stopped = f"stopped at {email}, {left} not sent" if left else f"stopped at {email}"
-        typer.echo(f"Error: {error_message(exc)}", err=True)
-        typer.echo(f"Verified {verified} of {count} addresses; {stopped}.", err=True)
+        summary = f"Verified {verified} of {count} addresses; {stopped}."
+        if as_json:
+            typer.echo(summary, err=True)
+            report_error(exc, email=email)
+        else:
+            report_error(exc)
+            typer.echo(summary, err=True)
         raise typer.Exit(1) from None
     except KeyboardInterrupt:
         typer.echo(f"Interrupted. Verified {verified} of {count} addresses.", err=True)
         raise typer.Exit(130) from None
-    return failed
+    return failed, verdicts
 
 
 def register(app: typer.Typer) -> None:

@@ -1,0 +1,340 @@
+"""The scripting contract: JSON errors under --json and verify --fail-on."""
+
+import copy
+import json
+
+import httpx
+import pytest
+import typer
+from conftest import load_fixture, serve
+from typer.testing import CliRunner
+
+from mailtester_cli.cli import app
+from mailtester_cli.client import BASE_URL
+from mailtester_cli.commands._shared import fail
+
+VERIFY = f"{BASE_URL}/verify"
+FINDER = f"{BASE_URL}/finder/email"
+SUBMIT = f"{BASE_URL}/verify/batch"
+STATUS = f"{BASE_URL}/verify/batch/1457"
+RESULTS = f"{BASE_URL}/verify/batch/1457/results"
+LISTS = f"{BASE_URL}/lists"
+COST = "This will use 1 credit.\n"
+
+runner = CliRunner()
+
+
+@pytest.fixture
+def api_key(monkeypatch):
+    monkeypatch.setenv("MAILTESTER_API_KEY", "evp_test")
+
+
+@pytest.fixture
+def guard(respx_mock):
+    """A catch-all route: any request at all shows up as guard.called."""
+    return respx_mock.route().respond(500)
+
+
+def fixture_data(name: str) -> dict:
+    return copy.deepcopy(load_fixture(name)[2]["data"])
+
+
+def fixture_response(name: str) -> httpx.Response:
+    status, headers, body = load_fixture(name)
+    return httpx.Response(status, headers=headers, json=body)
+
+
+def verdict(email: str, name: str = "verify_single") -> httpx.Response:
+    data = fixture_data(name) | {"email": email}
+    return httpx.Response(200, json={"success": True, "data": data})
+
+
+def last_error(result) -> dict:
+    """The JSON object on the last stderr line, after checking nothing reached stdout."""
+    assert result.stdout == ""
+    return json.loads(result.stderr.splitlines()[-1])
+
+
+# errors under --json
+
+
+@pytest.mark.parametrize(
+    ("fixture", "expected"),
+    [
+        (
+            "error_401",
+            {"error": "Invalid API key", "type": "AuthenticationError", "status_code": 401},
+        ),
+        (
+            "error_402",
+            {
+                "error": "Insufficient credits",
+                "type": "InsufficientCreditsError",
+                "status_code": 402,
+                "available_credits": 0,
+            },
+        ),
+        (
+            "error_429",
+            {
+                "error": "Rate limit exceeded",
+                "type": "RateLimitError",
+                "status_code": 429,
+                "retry_after": 30,
+            },
+        ),
+        (
+            "error_502",
+            {
+                "error": "The deliverability engine is currently unavailable.",
+                "type": "ServerError",
+                "status_code": 502,
+            },
+        ),
+    ],
+)
+def test_verify_api_error_is_one_json_line(respx_mock, api_key, clock, fixture, expected):
+    serve(respx_mock, fixture, VERIFY, method="POST")
+    result = runner.invoke(app, ["--json", "verify", "x@example.com"])
+    assert result.exit_code == 1
+    obj = last_error(result)
+    assert obj == expected
+    assert list(obj) == list(expected)  # the documented key order
+
+
+def test_404_error_object(respx_mock, api_key):
+    serve(respx_mock, "error_404_list", f"{LISTS}/999999999")
+    result = runner.invoke(app, ["--json", "lists", "show", "999999999"])
+    assert result.exit_code == 1
+    assert last_error(result) == {
+        "error": "List not found",
+        "type": "NotFoundError",
+        "status_code": 404,
+    }
+    assert result.stderr.count("\n") == 1
+
+
+def test_422_carries_the_errors_map(respx_mock, api_key, tmp_path):
+    serve(respx_mock, "error_422", SUBMIT, method="POST")
+    path = tmp_path / "emails.txt"
+    path.write_text("a@example.com\n")
+    result = runner.invoke(app, ["--json", "batch", "submit", str(path)])
+    assert result.exit_code == 1
+    obj = last_error(result)
+    assert obj["type"] == "ValidationError"
+    assert obj["status_code"] == 422
+    assert obj["errors"] == {"emails": ["The emails field is required."]}
+
+
+def test_422_without_a_map_has_no_errors_key(respx_mock, api_key):
+    serve(respx_mock, "finder_no_mx", FINDER, method="POST")
+    result = runner.invoke(app, ["--json", "find", "Jane", "Doe", "nonexistent-domain.invalid"])
+    assert result.exit_code == 1
+    obj = last_error(result)
+    assert obj["type"] == "ValidationError"
+    assert "errors" not in obj
+    assert result.stderr.startswith("This will use 3 credits.\n")  # notes stay text
+
+
+def test_hint_is_its_own_key(respx_mock, api_key):
+    serve(respx_mock, "batch_results_not_complete", RESULTS)
+    result = runner.invoke(app, ["--json", "batch", "results", "1457"])
+    assert result.exit_code == 1
+    assert last_error(result) == {
+        "error": "Bulk verification is not complete yet",
+        "type": "MailTesterError",
+        "status_code": 400,
+        "hint": "Check it with: mailtester batch status 1457",
+    }
+
+
+def test_wait_hint_after_status_lines(respx_mock, api_key, tmp_path, clock):
+    serve(respx_mock, "batch_submit", SUBMIT, method="POST")
+    serve(respx_mock, "error_502", STATUS)
+    path = tmp_path / "emails.txt"
+    path.write_text("a@example.com\n")
+    result = runner.invoke(app, ["--json", "batch", "submit", str(path), "--wait"])
+    assert result.exit_code == 1
+    obj = last_error(result)
+    assert obj["type"] == "ServerError"
+    assert obj["hint"] == (
+        "Batch 1457 may still be running. Check it with: mailtester batch status 1457"
+    )
+
+
+def test_not_started_batch_hint(respx_mock, api_key, clock):
+    serve(respx_mock, "batch_status_pending", STATUS)
+    result = runner.invoke(app, ["--json", "batch", "wait", "1457"])
+    assert result.exit_code == 1
+    obj = last_error(result)
+    assert obj["type"] == "BatchNotStartedError"
+    assert obj["status_code"] is None
+    assert obj["hint"].startswith("Start it in the MailTester app, then resume with:")
+
+
+def test_transport_error_has_no_status(respx_mock, api_key, clock):
+    respx_mock.post(VERIFY).mock(side_effect=httpx.ConnectError("refused"))
+    result = runner.invoke(app, ["--json", "verify", "x@example.com"])
+    assert result.exit_code == 1
+    obj = last_error(result)
+    assert obj["type"] == "APIConnectionError"
+    assert obj["status_code"] is None
+    assert "retrying in" in result.stderr  # retry lines stay text
+
+
+def test_missing_key(monkeypatch):
+    monkeypatch.delenv("MAILTESTER_API_KEY", raising=False)
+    result = runner.invoke(app, ["--json", "credits"])
+    assert result.exit_code == 1
+    obj = last_error(result)
+    assert obj["type"] == "MissingAPIKeyError"
+    assert obj["status_code"] is None
+    assert "MAILTESTER_API_KEY" in obj["error"]
+
+
+def test_usage_error(respx_mock, guard, api_key, tmp_path):
+    path = tmp_path / "emails.txt"
+    path.write_text("a@example.com\n")
+    args = ["--json", "batch", "submit", str(path), "--callback-url", "nope"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 2
+    assert last_error(result) == {
+        "error": "--callback-url must be an http(s) URL.",
+        "type": "UsageError",
+        "status_code": None,
+    }
+    assert not guard.called
+
+
+def test_local_error(respx_mock, guard, api_key, tmp_path):
+    path = tmp_path / "nope.txt"
+    result = runner.invoke(app, ["--json", "verify", "--file", str(path)])
+    assert result.exit_code == 1
+    assert last_error(result) == {
+        "error": f"File not found: {path}",
+        "type": "CLIError",
+        "status_code": None,
+    }
+
+
+def test_lists_delete_reports_each_id(respx_mock, api_key):
+    serve(respx_mock, "error_404_list", f"{LISTS}/1492", method="DELETE")
+    respx_mock.delete(f"{LISTS}/1493").respond(
+        200, json={"success": True, "message": "List deleted"}
+    )
+    result = runner.invoke(app, ["--json", "lists", "delete", "1492", "1493", "--yes"])
+    assert result.exit_code == 1
+    assert result.stdout == "Deleted list 1493\n"
+    assert json.loads(result.stderr) == {
+        "error": "List not found",
+        "type": "NotFoundError",
+        "status_code": 404,
+        "id": 1492,
+    }
+
+
+def test_verify_many_422_and_stop_under_json(respx_mock, api_key):
+    respx_mock.post(VERIFY).mock(
+        side_effect=[
+            verdict("a@example.com"),
+            fixture_response("error_422_email"),
+            fixture_response("error_402"),
+        ]
+    )
+    args = ["--json", "verify", "a@example.com", "nobody@", "b@example.com", "c@example.com"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert [json.loads(line)["email"] for line in result.stdout.splitlines()] == ["a@example.com"]
+    lines = result.stderr.splitlines()
+    assert lines[0] == "This will use 4 credits."
+    skipped = json.loads(lines[1])
+    assert skipped["type"] == "ValidationError" and skipped["email"] == "nobody@"
+    assert lines[2] == "Verified 1 of 4 addresses; stopped at b@example.com, 1 not sent."
+    stopped = json.loads(lines[3])
+    assert stopped["type"] == "InsufficientCreditsError"
+    assert stopped["email"] == "b@example.com"
+    assert len(lines) == 4
+
+
+def test_text_mode_is_unchanged(respx_mock, api_key):
+    serve(respx_mock, "error_402", VERIFY, method="POST")
+    result = runner.invoke(app, ["verify", "x@example.com"])
+    assert result.stderr == COST + "Error: Insufficient credits (available credits: 0)\n"
+
+
+# verify --fail-on
+
+
+def test_fail_on_match_exits_3(respx_mock, api_key):
+    serve(respx_mock, "verify_invalid", VERIFY, method="POST")
+    result = runner.invoke(app, ["verify", "nobody@example.com", "--fail-on", "invalid,unknown"])
+    assert result.exit_code == 3
+    assert result.stdout.startswith("nobody@freemail.example  invalid  score=0\n")
+    assert result.stderr == COST
+
+
+def test_fail_on_no_match_exits_0(respx_mock, api_key):
+    serve(respx_mock, "verify_single", VERIFY, method="POST")
+    result = runner.invoke(app, ["verify", "x@example.com", "--fail-on", "invalid,unknown"])
+    assert result.exit_code == 0
+
+
+def test_fail_on_trims_and_allows_repeats(respx_mock, api_key):
+    serve(respx_mock, "verify_single", VERIFY, method="POST")
+    result = runner.invoke(app, ["verify", "x@example.com", "--fail-on", " risky , risky,"])
+    assert result.exit_code == 3
+
+
+def test_fail_on_json_prints_the_payload_then_exits_3(respx_mock, api_key):
+    serve(respx_mock, "verify_invalid", VERIFY, method="POST")
+    result = runner.invoke(app, ["--json", "verify", "x@example.com", "--fail-on", "invalid"])
+    assert result.exit_code == 3
+    assert json.loads(result.stdout) == fixture_data("verify_invalid")
+
+
+@pytest.mark.parametrize("value", ["bogus", "invalid,bogus", "", "Invalid"])
+def test_fail_on_bad_value_is_usage_error(respx_mock, guard, api_key, value):
+    result = runner.invoke(app, ["verify", "x@example.com", "--fail-on", value])
+    assert result.exit_code == 2
+    assert result.stderr.startswith("Error: --fail-on accepts valid, risky, invalid, unknown")
+    assert not guard.called
+
+
+def test_fail_on_api_error_exits_1(respx_mock, api_key):
+    serve(respx_mock, "error_401", VERIFY, method="POST")
+    result = runner.invoke(app, ["verify", "x@example.com", "--fail-on", "invalid"])
+    assert result.exit_code == 1
+
+
+def test_fail_on_any_of_many(respx_mock, api_key):
+    respx_mock.post(VERIFY).mock(
+        side_effect=[verdict("a@example.com", "verify_invalid"), verdict("b@example.com")]
+    )
+    args = ["verify", "a@example.com", "b@example.com", "--fail-on", "invalid"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 3
+    assert len(result.stdout.splitlines()) == 2  # everything printed first
+
+
+def test_fail_on_many_error_outranks_a_match(respx_mock, api_key):
+    respx_mock.post(VERIFY).mock(
+        side_effect=[
+            verdict("a@example.com", "verify_invalid"),
+            fixture_response("error_422_email"),
+        ]
+    )
+    result = runner.invoke(app, ["verify", "a@example.com", "nobody@", "--fail-on", "invalid"])
+    assert result.exit_code == 1
+
+
+def test_fail_on_in_help():
+    result = runner.invoke(app, ["verify", "--help"])
+    assert "--fail-on" in result.stdout
+
+
+def test_json_mode_ends_with_the_command(respx_mock, api_key, capsys):
+    serve(respx_mock, "error_401", VERIFY, method="POST")
+    runner.invoke(app, ["--json", "verify", "x@example.com"])
+    with pytest.raises(typer.Exit):
+        fail("outside a command")
+    assert capsys.readouterr().err == "Error: outside a command\n"

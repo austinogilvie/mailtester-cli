@@ -7,12 +7,12 @@ import typer
 from mailtester_cli.commands._shared import (
     client,
     confirm,
-    error_message,
     fail,
     fmt_int,
     get_state,
     handle_errors,
     print_json,
+    report_error,
 )
 from mailtester_cli.errors import ConflictError, NotFoundError
 from mailtester_cli.models import ListJob, ListPage
@@ -177,7 +177,7 @@ def delete(
                 # Only errors about this one id: anything else (429, 401, 5xx, ...) would hit
                 # every remaining id too, so it propagates to handle_errors and stops the loop.
                 prefix = f"List {list_id}: " if len(ids) > 1 else ""
-                typer.echo(f"Error: {prefix}{error_message(exc)}", err=True)
+                report_error(exc, prefix=prefix, id=list_id)
                 failed = True
             else:
                 typer.echo(f"Deleted list {list_id}")
